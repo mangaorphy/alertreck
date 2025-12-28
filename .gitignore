@@ -1,0 +1,80 @@
+# Audio folders
+BACKGROUND/
+THREAT/
+THREAT_CONTEXT/
+audio_data/
+environmental_sounds/
+preprocessed_data/
+
+# Sensitive files
+rootkey.csv
+*.pem
+*.key
+
+# AWS credentials
+.aws/
+credentials
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*/.ipynb_checkpoints/*
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Model files (large)
+*.h5
+*.keras
+*.tflite
+*.pb
+saved_model/
+
+# Data files (large)
+*.wav
+*.mp3
+*.flac
+*.csv
+!class_labels_indices.csv
+!balanced_train_segments.csv
+!eval_segments.csv
+!unbalanced_train_segments.csv
+
+# Logs
+*.log
+logs/
