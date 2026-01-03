@@ -1,0 +1,21 @@
+{
+  "model_type": "YAMNet_Classifier_EndToEnd",
+  "feature_extractor": "YAMNet (TensorFlow Hub)",
+  "embedding_dim": 1024,
+  "val_accuracy": 0.9381494522094727,
+  "val_loss": 0.2537840008735657,
+  "class_names": [
+    "BACKGROUND",
+    "THREAT_CONTEXT",
+    "THREAT"
+  ],
+  "total_samples": 13468,
+  "train_samples": 9432,
+  "val_samples": 2015,
+  "total_parameters": 692995,
+  "audio_config": {
+    "sample_rate": 16000,
+    "duration": 10.0,
+    "target_length": 160000
+  }
+}

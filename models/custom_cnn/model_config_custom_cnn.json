@@ -1,0 +1,52 @@
+{
+  "model_type": "CustomCNN",
+  "val_accuracy": 0.3422584533691406,
+  "val_loss": 32.961509704589844,
+  "class_names": [
+    "BACKGROUND",
+    "THREAT_CONTEXT",
+    "THREAT"
+  ],
+  "input_shape": [
+    128,
+    431,
+    1
+  ],
+  "preprocessing": {
+    "target_sr": 22050,
+    "duration": 10.0,
+    "target_length": 220500,
+    "n_mels": 128,
+    "n_mfcc": 40,
+    "n_fft": 2048,
+    "hop_length": 512,
+    "threat_levels": {
+      "THREAT": 2,
+      "THREAT_CONTEXT": 1,
+      "BACKGROUND": 0
+    },
+    "categories": {
+      "THREAT": [
+        "gunshot",
+        "chainsaw",
+        "human_voice"
+      ],
+      "THREAT_CONTEXT": [
+        "dog_bark"
+      ],
+      "BACKGROUND": [
+        "animal_sound",
+        "wind_rain",
+        "ambient_noise"
+      ]
+    },
+    "dataset_stats": {
+      "total_files": 6734,
+      "train_size": 14592,
+      "val_size": 859,
+      "test_size": 1011
+    }
+  },
+  "batch_size": 64,
+  "total_parameters": 1275619
+}

@@ -1,0 +1,55 @@
+{
+  "model_type": "MobileNetV2",
+  "val_accuracy": 0.4854481816291809,
+  "val_loss": 1.3822267055511475,
+  "class_names": [
+    "BACKGROUND",
+    "THREAT_CONTEXT",
+    "THREAT"
+  ],
+  "input_shape": [
+    128,
+    128,
+    3
+  ],
+  "original_mel_shape": [
+    128,
+    431
+  ],
+  "preprocessing": {
+    "target_sr": 22050,
+    "duration": 10.0,
+    "target_length": 220500,
+    "n_mels": 128,
+    "n_mfcc": 40,
+    "n_fft": 2048,
+    "hop_length": 512,
+    "threat_levels": {
+      "THREAT": 2,
+      "THREAT_CONTEXT": 1,
+      "BACKGROUND": 0
+    },
+    "categories": {
+      "THREAT": [
+        "gunshot",
+        "chainsaw",
+        "human_voice"
+      ],
+      "THREAT_CONTEXT": [
+        "dog_bark"
+      ],
+      "BACKGROUND": [
+        "animal_sound",
+        "wind_rain",
+        "ambient_noise"
+      ]
+    },
+    "dataset_stats": {
+      "total_files": 6734,
+      "train_size": 14592,
+      "val_size": 859,
+      "test_size": 1011
+    }
+  },
+  "batch_size": 64
+}

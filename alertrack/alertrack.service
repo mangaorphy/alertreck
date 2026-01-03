@@ -1,0 +1,28 @@
+[Unit]
+Description=ALERTRACK Anti-Poaching Edge System
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=10
+User=pi
+WorkingDirectory=/home/pi/alertrack
+Environment="PATH=/home/pi/alertrack/venv/bin"
+ExecStart=/home/pi/alertrack/venv/bin/python /home/pi/alertrack/main.py
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=alertrack
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+
+# Restart policy
+RuntimeMaxSec=infinity
+
+[Install]
+WantedBy=multi-user.target
