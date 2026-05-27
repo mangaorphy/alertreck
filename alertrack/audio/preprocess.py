@@ -1,214 +1,120 @@
 """
 Audio Preprocessing Module
 ===========================
-Converts raw audio to mel spectrograms matching training preprocessing.
-CRITICAL: Parameters must exactly match those used during model training.
+Converts a raw 3-second mono waveform to a log-mel spectrogram.
+
+Parameters MUST exactly match scripts/audio_preprocessing.py:
+  SR       = 44 100 Hz
+  N_MELS   = 128
+  N_FFT    = 2 048
+  HOP_STFT = 512
+  FMAX     = 22 050 Hz
+  Output   = librosa.power_to_db(S, ref=np.max)   — raw dB, not normalised
+  Shape    = (1, 128, 259)  channels-first (PyTorch convention)
 """
 
 import numpy as np
 import librosa
-from typing import Optional
+from scipy import signal as scipy_signal
 
 from ..config import (
-    SAMPLE_RATE, MEL_BANDS, FFT_SIZE, HOP_LENGTH,
-    WINDOW_TYPE, FMIN, FMAX, INPUT_SHAPE, DEBUG_MODE
+    SAMPLE_RATE, BUFFER_SIZE, N_MELS, N_FFT, HOP_STFT, FMIN, FMAX,
+    INPUT_SHAPE, DEBUG_MODE, SILENCE_THRESHOLD
 )
+
+# High-pass filter coefficients — removes 50 Hz electrical hum (built once at import)
+_HPF_B, _HPF_A = scipy_signal.butter(4, 120 / (SAMPLE_RATE / 2), btype="high")
 
 
 class AudioPreprocessor:
-    """
-    Preprocesses audio for model inference.
-    Converts raw waveform to mel spectrogram using same parameters as training.
-    """
-    
+    """Converts raw audio to a log-mel spectrogram ready for ONNXModel.predict()."""
+
     def __init__(self):
-        """Initialize preprocessor with configuration from training."""
-        self.sample_rate = SAMPLE_RATE
-        self.n_mels = MEL_BANDS
-        self.n_fft = FFT_SIZE
-        self.hop_length = HOP_LENGTH
-        self.window = WINDOW_TYPE
-        self.fmin = FMIN
-        self.fmax = FMAX
-        self.input_shape = INPUT_SHAPE
-        
-        print(f"AudioPreprocessor initialized:")
-        print(f"  Sample Rate: {self.sample_rate} Hz")
-        print(f"  Mel Bands: {self.n_mels}")
-        print(f"  FFT Size: {self.n_fft}")
-        print(f"  Hop Length: {self.hop_length}")
-        print(f"  Target Shape: {self.input_shape}")
-    
-    def preprocess(self, audio: np.ndarray) -> Optional[np.ndarray]:
+        print(f"AudioPreprocessor: SR={SAMPLE_RATE}  n_mels={N_MELS}  "
+              f"n_fft={N_FFT}  hop={HOP_STFT}  fmax={FMAX}")
+        print(f"  Expected input : {BUFFER_SIZE} samples ({SAMPLE_RATE/1e3:.1f} kHz × 3 s)")
+        print(f"  Output shape   : {INPUT_SHAPE}")
+
+    def preprocess(self, audio: np.ndarray) -> np.ndarray | None:
         """
-        Convert raw audio to mel spectrogram.
-        
         Args:
-            audio: Raw audio samples (float32, mono)
-            
+            audio: float32 mono waveform, ~132 300 samples at 44.1 kHz
+
         Returns:
-            Mel spectrogram ready for model input, or None on error
+            np.ndarray shape (1, 128, 259) float32, or None on error
         """
         try:
-            # Ensure audio is 1D and float32
-            if len(audio.shape) > 1:
-                audio = audio.flatten()
-            audio = audio.astype(np.float32)
-            
-            # Normalize audio to [-1, 1]
-            max_val = np.max(np.abs(audio))
-            if max_val > 0:
-                audio = audio / max_val
-            
-            # Compute mel spectrogram
-            mel_spec = librosa.feature.melspectrogram(
-                y=audio,
-                sr=self.sample_rate,
-                n_mels=self.n_mels,
-                n_fft=self.n_fft,
-                hop_length=self.hop_length,
-                window=self.window,
-                fmin=self.fmin,
-                fmax=self.fmax,
-                power=2.0  # Power spectrogram
-            )
-            
-            # Convert to log scale (dB)
-            mel_spec_db = librosa.power_to_db(mel_spec, ref=np.max)
-            
-            # Normalize to [0, 1]
-            mel_spec_norm = (mel_spec_db - mel_spec_db.min()) / (mel_spec_db.max() - mel_spec_db.min() + 1e-8)
-            
-            # Adjust to target shape if needed
-            mel_spec_resized = self._resize_to_target(mel_spec_norm)
-            
-            # Add channel dimension if needed (for CNN models)
-            # Shape should be (height, width, channels) or (channels, height, width)
-            if len(self.input_shape) == 3:
-                # Assuming (height, width, channels) format
-                if mel_spec_resized.shape != self.input_shape[:2]:
-                    if DEBUG_MODE:
-                        print(f"⚠️  Shape mismatch: {mel_spec_resized.shape} vs {self.input_shape[:2]}")
-                
-                # Add channel dimension
-                mel_spec_resized = np.expand_dims(mel_spec_resized, axis=-1)
-            
+            audio = audio.flatten().astype(np.float32)
+
+            # Silence gate — skip inference if no real signal
+            rms = np.sqrt(np.mean(audio ** 2))
             if DEBUG_MODE:
-                print(f"Preprocessing: audio={audio.shape} → mel_spec={mel_spec_resized.shape}")
-            
-            return mel_spec_resized.astype(np.float32)
-        
+                print(f"RMS={rms:.6f}  threshold={SILENCE_THRESHOLD}")
+            if rms < SILENCE_THRESHOLD:
+                if DEBUG_MODE:
+                    print(f"Silence gate: skipping (RMS below threshold)")
+                return None
+
+            # High-pass filter — removes 50/60 Hz electrical hum from mic
+            audio = scipy_signal.filtfilt(_HPF_B, _HPF_A, audio).astype(np.float32)
+
+            # RMS-normalise to 0.1 (same as training pipeline)
+            audio = audio * (0.1 / rms)
+
+            # Pad / trim to exactly BUFFER_SIZE samples
+            if len(audio) < BUFFER_SIZE:
+                audio = np.pad(audio, (0, BUFFER_SIZE - len(audio)))
+            else:
+                audio = audio[:BUFFER_SIZE]
+
+            # Log-mel spectrogram — exactly as in training
+            S = librosa.feature.melspectrogram(
+                y=audio,
+                sr=SAMPLE_RATE,
+                n_mels=N_MELS,
+                n_fft=N_FFT,
+                hop_length=HOP_STFT,
+                fmin=FMIN,
+                fmax=FMAX,
+            )
+            mel_db = librosa.power_to_db(S, ref=np.max).astype(np.float32)
+            # shape: (128, 259)
+
+            # Add channel dimension → (1, 128, 259)
+            mel_db = np.expand_dims(mel_db, axis=0)
+
+            if DEBUG_MODE:
+                print(f"Preprocess: audio {audio.shape} → mel {mel_db.shape}  "
+                      f"[{mel_db.min():.1f}, {mel_db.max():.1f}] dB")
+
+            return mel_db
+
         except Exception as e:
-            print(f"❌ Preprocessing error: {e}")
+            print(f"Preprocessing error: {e}")
             return None
-    
-    def _resize_to_target(self, mel_spec: np.ndarray) -> np.ndarray:
-        """
-        Resize mel spectrogram to match model input shape.
-        
-        Args:
-            mel_spec: Mel spectrogram (mels, time)
-            
-        Returns:
-            Resized spectrogram
-        """
-        target_height, target_width = self.input_shape[0], self.input_shape[1]
-        current_height, current_width = mel_spec.shape
-        
-        # Pad or crop height (mel bands)
-        if current_height < target_height:
-            pad_height = target_height - current_height
-            mel_spec = np.pad(mel_spec, ((0, pad_height), (0, 0)), mode='constant')
-        elif current_height > target_height:
-            mel_spec = mel_spec[:target_height, :]
-        
-        # Pad or crop width (time steps)
-        if current_width < target_width:
-            pad_width = target_width - current_width
-            mel_spec = np.pad(mel_spec, ((0, 0), (0, pad_width)), mode='constant')
-        elif current_width > target_width:
-            mel_spec = mel_spec[:, :target_width]
-        
-        return mel_spec
-    
-    def preprocess_batch(self, audio_list: list) -> np.ndarray:
-        """
-        Preprocess multiple audio samples.
-        
-        Args:
-            audio_list: List of audio arrays
-            
-        Returns:
-            Batch of preprocessed spectrograms (batch_size, height, width, channels)
-        """
-        spectrograms = []
-        
-        for audio in audio_list:
-            spec = self.preprocess(audio)
-            if spec is not None:
-                spectrograms.append(spec)
-        
-        if not spectrograms:
-            return np.array([])
-        
-        return np.array(spectrograms, dtype=np.float32)
-    
-    def get_expected_audio_length(self) -> int:
-        """Get expected audio length in samples."""
-        # Calculate from target width and hop length
-        expected_samples = (self.input_shape[1] - 1) * self.hop_length + self.n_fft
-        return expected_samples
 
 
 def test_preprocessor():
-    """Test the audio preprocessor."""
-    print("\n🔧 Testing AudioPreprocessor...")
+    print("\nTesting AudioPreprocessor...")
     print("=" * 60)
-    
-    # Create preprocessor
-    preprocessor = AudioPreprocessor()
-    
-    # Generate test audio (10 seconds of white noise)
-    duration = 10.0
-    audio = np.random.randn(int(SAMPLE_RATE * duration)).astype(np.float32)
-    
-    print(f"\nTest audio: shape={audio.shape}, duration={duration}s")
-    
-    # Preprocess
+
+    proc = AudioPreprocessor()
+    audio = np.random.randn(BUFFER_SIZE).astype(np.float32)
+
     import time
-    start = time.time()
-    mel_spec = preprocessor.preprocess(audio)
-    elapsed = time.time() - start
-    
-    if mel_spec is not None:
-        print(f"\n✅ Preprocessing successful!")
-        print(f"  Input shape: {audio.shape}")
-        print(f"  Output shape: {mel_spec.shape}")
-        print(f"  Expected shape: {INPUT_SHAPE}")
-        print(f"  Processing time: {elapsed*1000:.2f}ms")
-        print(f"  Min value: {mel_spec.min():.4f}")
-        print(f"  Max value: {mel_spec.max():.4f}")
-        print(f"  Mean value: {mel_spec.mean():.4f}")
-        
-        # Check shape matches
-        if mel_spec.shape == INPUT_SHAPE:
-            print("\n✅ Shape matches expected input!")
-        else:
-            print(f"\n⚠️  Shape mismatch!")
-            print(f"  Expected: {INPUT_SHAPE}")
-            print(f"  Got: {mel_spec.shape}")
+    t0 = time.time()
+    out = proc.preprocess(audio)
+    elapsed = time.time() - t0
+
+    if out is not None:
+        print(f"Output shape   : {out.shape}  (expected {INPUT_SHAPE})")
+        print(f"Value range    : [{out.min():.1f}, {out.max():.1f}] dB")
+        print(f"Processing time: {elapsed*1000:.1f} ms")
+        match = out.shape == INPUT_SHAPE
+        print(f"Shape OK       : {match}")
     else:
-        print("\n❌ Preprocessing failed!")
-    
-    # Test batch processing
-    print("\n🔧 Testing batch processing...")
-    audio_batch = [audio, audio * 0.5, audio * 0.25]
-    batch = preprocessor.preprocess_batch(audio_batch)
-    print(f"  Batch shape: {batch.shape}")
-    print(f"  Expected: (3, {INPUT_SHAPE[0]}, {INPUT_SHAPE[1]}, {INPUT_SHAPE[2]})")
-    
-    print("\n" + "=" * 60)
-    print("✅ Test complete!")
+        print("Preprocessing failed.")
+    print("=" * 60)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 # ALERTRACK Edge System Dependencies
-# Raspberry Pi 4 compatible - Python 3.10+
+# Raspberry Pi 4 — Python 3.10+
 
 # Core scientific computing
 numpy>=1.24.0,<2.0.0
@@ -9,13 +9,16 @@ librosa>=0.10.0
 sounddevice>=0.4.6
 soundfile>=0.12.1
 
-# TensorFlow Lite (Raspberry Pi optimized)
-# Install via: pip install --index-url https://google-coral.github.io/py-repo/ tflite_runtime
-# Or use: pip install tensorflow-lite (for non-Coral devices)
-tflite-runtime>=2.14.0
+# ONNX Runtime (replaces TFLite — lighter, no TF dependency)
+# Raspberry Pi wheel: pip install onnxruntime  (pre-built for armv7/aarch64)
+onnxruntime>=1.17.0
 
 # GPS communication
 pyserial>=3.5
 
-# Optional: Performance monitoring
+# Performance monitoring
 psutil>=5.9.0
+
+# ── Export-only (run on training machine, not needed on Pi) ──────────────────
+# torch>=2.1.0
+# onnx>=1.15.0

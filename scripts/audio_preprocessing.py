@@ -1,574 +1,634 @@
 """
-Audio Preprocessing Pipeline for Threat Detection Model
-========================================================
-This module handles preprocessing of audio files for training a threat detection model
-to identify poaching activities and notify rangers.
+Stage 2 — Audio Preprocessing Pipeline (Compound Augmentation + Curriculum)
+==========================================================================
+Spec (ROADMAP §3.1, Proposal §2.3.7):
+  Step 1  Resample → 44.1 kHz mono (Kaiser-best)
+  Step 2  Normalise → −23 dBFS EBU R128
+  Step 3  Segment 3 s clips, 1.5 s hop (50 % overlap)
+  Step 4a 128-bin log-mel  (win=1102, hop=441, n_fft=2048, Hann)
+  Step 4b MFCC + Δ + ΔΔ  (40 → 120 rows)
+  Step 5  DIR calibration (optional --dir-ir WAV)  — sweep-tone IR of deployment USB mic
+  Step 6a SpecAugment on mel — 2 time masks (max 40 fr) + 2 freq masks (max 20 bins)
+  Step 6b Compound augmentation pool — noise | rir | lowpass | mp3 | gain | clip
+           Physical constraint: rir ⊕ clip are mutually exclusive
+  Step 6c FilterAugment — ±6 dB smooth random freq curve on mel bins
+  Step 6d mixup_batch() — call from DataLoader, not here
+  Step 6e Learnability filter — stub; active when --conv-ae supplied
 
-Features:
-- Audio loading and validation
-- Standardization (sample rate, duration, channels)
-- Feature extraction (Mel-spectrograms, MFCCs, raw waveforms)
-- Data augmentation (time/pitch shifting, noise injection)
-- Train/validation/test split
-- Three-tier threat level encoding
+Curriculum phases (ROADMAP §3.3):
+  A  1–2 effects, severity 0.3, SNR ≥15 dB,   1 aug copy / window
+  B  2–4 effects, severity 0.5, SNR 10–15 dB,  2 aug copies / window
+  C  2–5 effects, severity 1.0, SNR 5–10 dB,   3 aug copies / window
+
+Output:
+  data/processed/mel/{train,val,test}/shard_NNN.npz
+  data/processed/mel/train_aug_{A,B,C}/shard_NNN.npz   (generated per --aug-phase)
+  data/processed/mfcc/{same}
+  data/processed/splits.json    (stable file-level 60/20/20, seed 42)
+  data/processed/manifest.json
+
+Usage:
+  python3 scripts/audio_preprocessing.py                      # clean splits only
+  python3 scripts/audio_preprocessing.py --aug-phase A B C   # + all curriculum phases
+  python3 scripts/audio_preprocessing.py --aug-phase B       # Phase B only
+  python3 scripts/audio_preprocessing.py --dir-ir usb_mic_ir.wav  # record with: arecord -D plughw:1,0 -d 10 sweep.wav
+  python3 scripts/audio_preprocessing.py --shard-size 500
 """
 
-import os
-import numpy as np
-import librosa
-import librosa.display
-import soundfile as sf
-from pathlib import Path
-from typing import Tuple, Dict, List, Optional
+import argparse
+import hashlib
 import json
-import pickle
+import os
+import random
+import subprocess
+import tempfile
+import warnings
+from collections import Counter, defaultdict
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from pathlib import Path
+
+import librosa
+import numpy as np
+import soundfile as sf
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
-import warnings
-warnings.filterwarnings('ignore')
+
+warnings.filterwarnings("ignore")
+
+# ── constants ─────────────────────────────────────────────────────────────────
+SEED         = 42
+SR           = 44_100
+CLIP_LEN     = 3.0
+HOP_LEN      = 1.5
+CLIP_SAMPLES = int(SR * CLIP_LEN)   # 132 300
+HOP_SAMPLES  = int(SR * HOP_LEN)    #  66 150
+
+N_MELS      = 128
+N_MFCC      = 40
+N_FFT       = 2048
+WIN_LENGTH  = 1102                  # 25 ms @ 44.1 kHz
+HOP_STFT    = 441                   # 10 ms @ 44.1 kHz
+
+EBU_TARGET  = 10 ** (-23.0 / 20.0) # −23 dBFS ≈ 0.07079
+
+FOLDER_TO_LABEL: dict[str, int] = {
+    "background_animals":   0,
+    "background_wind_rain": 1,
+    "threat_chainsaw":      2,
+    "threat_dog":           3,
+    "threat_gunshot":       4,
+    "threat_human":         5,
+    "threat_vehicle":       6,
+}
+LABEL_NAMES = {v: k for k, v in FOLDER_TO_LABEL.items()}
+AUDIO_EXTS  = {".wav", ".mp3", ".flac", ".ogg", ".m4a"}
+
+REPO_ROOT   = Path(__file__).resolve().parent.parent
+DATASET_DIR = REPO_ROOT / "dataset"
+OUT_ROOT    = REPO_ROOT / "data" / "processed"
+SPLITS_JSON = OUT_ROOT / "splits.json"
+
+PHASE_CFG: dict[str, dict] = {
+    "A": {"min_fx": 1, "max_fx": 2, "severity": 0.3, "snr_lo": 15, "snr_hi": 30, "copies": 1},
+    "B": {"min_fx": 2, "max_fx": 4, "severity": 0.5, "snr_lo": 10, "snr_hi": 15, "copies": 2},
+    "C": {"min_fx": 2, "max_fx": 5, "severity": 1.0, "snr_lo":  5, "snr_hi": 10, "copies": 3},
+}
+
+# ── worker-process globals (populated by _init_worker) ────────────────────────
+_g_noise_pool: list[np.ndarray] = []
+_g_ir: np.ndarray | None = None
 
 
-class AudioPreprocessor:
-    """
-    Comprehensive audio preprocessing pipeline for threat detection.
-    """
-    
-    def __init__(
-        self,
-        data_dir: str,
-        target_sr: int = 22050,
-        duration: float = 10.0,
-        n_mels: int = 128,
-        n_mfcc: int = 40,
-        n_fft: int = 2048,
-        hop_length: int = 512,
-        random_seed: int = 42
-    ):
-        """
-        Initialize the audio preprocessor.
-        
-        Args:
-            data_dir: Root directory containing THREAT, THREAT_CONTEXT, BACKGROUND folders
-            target_sr: Target sample rate for all audio files
-            duration: Target duration in seconds (clips will be padded/trimmed)
-            n_mels: Number of mel bands for mel-spectrogram
-            n_mfcc: Number of MFCCs to extract
-            n_fft: FFT window size
-            hop_length: Number of samples between successive frames
-            random_seed: Random seed for reproducibility
-        """
-        self.data_dir = Path(data_dir)
-        self.target_sr = target_sr
-        self.duration = duration
-        self.n_mels = n_mels
-        self.n_mfcc = n_mfcc
-        self.n_fft = n_fft
-        self.hop_length = hop_length
-        self.random_seed = random_seed
-        
-        # Target length in samples
-        self.target_length = int(target_sr * duration)
-        
-        # Three-tier threat categorization
-        self.threat_levels = {
-            'THREAT': 2,           # High priority - immediate threat
-            'THREAT_CONTEXT': 1,   # Medium priority - potential threat indicator
-            'BACKGROUND': 0        # Low priority - normal environmental sounds
-        }
-        
-        # Subcategory mapping
-        self.categories = {
-            'THREAT': ['gunshot', 'chainsaw', 'human_voice'],
-            'THREAT_CONTEXT': ['dog_bark'],
-            'BACKGROUND': ['animal_sound', 'wind_rain', 'ambient_noise']
-        }
-        
-        np.random.seed(random_seed)
-        
-    def load_audio(self, file_path: str) -> Tuple[np.ndarray, int]:
-        """
-        Load audio file and return waveform and sample rate.
-        
-        Args:
-            file_path: Path to audio file
-            
-        Returns:
-            Tuple of (audio waveform, sample rate)
-        """
-        try:
-            # Use soundfile instead of librosa.load to avoid numba dependency
-            audio, sr = sf.read(file_path, dtype='float32')
-            
-            # Convert to mono if stereo
-            if len(audio.shape) > 1:
-                audio = np.mean(audio, axis=1)
-            
-            # Resample if needed
-            if sr != self.target_sr:
-                audio = librosa.resample(audio, orig_sr=sr, target_sr=self.target_sr)
-            
-            return audio, self.target_sr
-        except Exception as e:
-            print(f"Error loading {file_path}: {e}")
-            return None, None
-    
-    def standardize_audio(self, audio: np.ndarray) -> np.ndarray:
-        """
-        Standardize audio to target duration by padding or trimming.
-        
-        Args:
-            audio: Input audio waveform
-            
-        Returns:
-            Standardized audio of fixed length
-        """
-        if len(audio) > self.target_length:
-            # Trim audio to target length
-            audio = audio[:self.target_length]
-        elif len(audio) < self.target_length:
-            # Pad audio with zeros
-            padding = self.target_length - len(audio)
-            audio = np.pad(audio, (0, padding), mode='constant')
-        
+def _init_worker(noise_paths: list[str], ir_path: str | None) -> None:
+    global _g_noise_pool, _g_ir
+    random.seed(SEED)
+    np.random.seed(SEED)
+    _g_noise_pool.clear()
+    for p in noise_paths:
+        a = load_mono(Path(p))
+        if a is not None:
+            _g_noise_pool.append(ebu_r128_normalize(a))
+    _g_ir = load_mono(Path(ir_path)) if ir_path else None
+
+
+# ── audio I/O ─────────────────────────────────────────────────────────────────
+
+def load_mono(path: Path) -> np.ndarray | None:
+    try:
+        if path.suffix.lower() == ".mp3":
+            cmd = ["ffmpeg", "-i", str(path), "-f", "f32le",
+                   "-ar", str(SR), "-ac", "1", "pipe:1", "-loglevel", "quiet"]
+            result = subprocess.run(cmd, capture_output=True)
+            if not result.stdout:
+                return None
+            return np.frombuffer(result.stdout, dtype=np.float32).copy()
+        audio, sr = sf.read(str(path), dtype="float32", always_2d=False)
+        if audio.ndim == 2:
+            audio = audio.mean(axis=1)
+        if sr != SR:
+            audio = librosa.resample(audio, orig_sr=sr, target_sr=SR,
+                                     res_type="kaiser_best")
+        return audio.astype(np.float32)
+    except Exception:
+        return None
+
+
+def ebu_r128_normalize(audio: np.ndarray) -> np.ndarray:
+    rms = np.sqrt(np.mean(audio ** 2))
+    if rms < 1e-9:
         return audio
-    
-    def normalize_audio(self, audio: np.ndarray) -> np.ndarray:
-        """
-        Normalize audio to [-1, 1] range.
-        
-        Args:
-            audio: Input audio waveform
-            
-        Returns:
-            Normalized audio
-        """
-        max_val = np.max(np.abs(audio))
-        if max_val > 0:
-            audio = audio / max_val
-        return audio
-    
-    def extract_mel_spectrogram(self, audio: np.ndarray) -> np.ndarray:
-        """
-        Extract mel-spectrogram from audio.
-        
-        Args:
-            audio: Input audio waveform
-            
-        Returns:
-            Mel-spectrogram (n_mels, time_steps)
-        """
-        mel_spec = librosa.feature.melspectrogram(
-            y=audio,
-            sr=self.target_sr,
-            n_mels=self.n_mels,
-            n_fft=self.n_fft,
-            hop_length=self.hop_length,
-            fmax=self.target_sr // 2
+    return np.clip(audio * (EBU_TARGET / rms), -1.0, 1.0).astype(np.float32)
+
+
+def slice_windows(audio: np.ndarray) -> list[np.ndarray]:
+    if len(audio) < CLIP_SAMPLES:
+        audio = np.pad(audio, (0, CLIP_SAMPLES - len(audio)))
+    wins, start = [], 0
+    while start + CLIP_SAMPLES <= len(audio):
+        wins.append(audio[start: start + CLIP_SAMPLES].copy())
+        start += HOP_SAMPLES
+    return wins
+
+
+# ── DIR calibration ───────────────────────────────────────────────────────────
+
+def dir_calibrate(audio: np.ndarray, ir: np.ndarray) -> np.ndarray:
+    out = np.convolve(audio, ir, mode="full")[: len(audio)]
+    return out.astype(np.float32)
+
+
+# ── effect implementations (numpy + librosa + ffmpeg; no scipy) ───────────────
+
+def _sinc_lowpass(cutoff_hz: float, num_taps: int = 101) -> np.ndarray:
+    if num_taps % 2 == 0:
+        num_taps += 1
+    fc = cutoff_hz / SR
+    n  = np.arange(num_taps) - (num_taps - 1) / 2
+    h  = np.sinc(2 * fc * n) * np.blackman(num_taps)
+    h /= h.sum()
+    return h.astype(np.float32)
+
+
+def _apply_lowpass(audio: np.ndarray, severity: float) -> np.ndarray:
+    # severity 0 → 22050 Hz (pass-through); severity 1 → 1000 Hz
+    cutoff = max(500.0, (1.0 - severity) * (SR / 2) + severity * 1000.0)
+    h = _sinc_lowpass(cutoff)
+    return np.clip(np.convolve(audio, h, mode="same"), -1.0, 1.0).astype(np.float32)
+
+
+def _synthetic_rir(rt60_s: float) -> np.ndarray:
+    length = max(1, int(SR * rt60_s))
+    t   = np.arange(length) / SR
+    env = np.exp(-6.9 * t / rt60_s)
+    rir = (np.random.randn(length) * env).astype(np.float32)
+    peak = np.abs(rir).max()
+    return rir / peak if peak > 1e-9 else rir
+
+
+def _apply_rir(audio: np.ndarray, severity: float) -> np.ndarray:
+    rt60 = 0.05 + severity * 0.45   # 50 ms (mild) → 500 ms (severe)
+    rir  = _synthetic_rir(rt60)
+    out  = np.convolve(audio, rir, mode="full")[: len(audio)]
+    peak = np.abs(out).max()
+    return (out / peak if peak > 1e-9 else out).astype(np.float32)
+
+
+def _apply_mp3(audio: np.ndarray, severity: float) -> np.ndarray:
+    bitrate  = int(128 - severity * 96)   # 128 kbps (mild) → 32 kbps (severe)
+    in_path  = mp3_path = ""
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            in_path = f.name
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
+            mp3_path = f.name
+        sf.write(in_path, audio, SR, format="WAV", subtype="PCM_16")
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", in_path, "-b:a", f"{bitrate}k",
+             mp3_path, "-loglevel", "quiet"],
+            check=True, capture_output=True,
         )
-        
-        # Convert to log scale (dB)
-        mel_spec_db = librosa.power_to_db(mel_spec, ref=np.max)
-        
-        return mel_spec_db
-    
-    def extract_mfcc(self, audio: np.ndarray) -> np.ndarray:
-        """
-        Extract MFCCs from audio.
-        
-        Args:
-            audio: Input audio waveform
-            
-        Returns:
-            MFCCs (n_mfcc, time_steps)
-        """
-        mfcc = librosa.feature.mfcc(
-            y=audio,
-            sr=self.target_sr,
-            n_mfcc=self.n_mfcc,
-            n_fft=self.n_fft,
-            hop_length=self.hop_length
+        result = subprocess.run(
+            ["ffmpeg", "-i", mp3_path, "-f", "f32le",
+             "-ar", str(SR), "-ac", "1", "pipe:1", "-loglevel", "quiet"],
+            capture_output=True,
         )
-        
-        return mfcc
-    
-    def extract_features(self, audio: np.ndarray) -> Dict[str, np.ndarray]:
-        """
-        Extract multiple features from audio.
-        
-        Args:
-            audio: Input audio waveform
-            
-        Returns:
-            Dictionary containing different feature representations
-        """
-        features = {
-            'waveform': audio,
-            'mel_spectrogram': self.extract_mel_spectrogram(audio),
-            'mfcc': self.extract_mfcc(audio)
-        }
-        
-        return features
-    
-    def augment_audio(self, audio: np.ndarray, augmentation_type: str) -> np.ndarray:
-        """
-        Apply data augmentation to audio.
-        
-        Args:
-            audio: Input audio waveform
-            augmentation_type: Type of augmentation to apply
-            
-        Returns:
-            Augmented audio
-        """
-        if augmentation_type == 'time_stretch':
-            try:
-                # Random time stretching (0.8x to 1.2x speed)
-                rate = np.random.uniform(0.8, 1.2)
-                audio = librosa.effects.time_stretch(audio, rate=rate)
-                audio = self.standardize_audio(audio)
-            except Exception as e:
-                # Skip if numba not available
-                if 'numba' in str(e):
-                    pass
-                else:
-                    raise
-            
-        elif augmentation_type == 'pitch_shift':
-            try:
-                # Random pitch shifting (-2 to +2 semitones)
-                n_steps = np.random.uniform(-2, 2)
-                audio = librosa.effects.pitch_shift(
-                    audio, sr=self.target_sr, n_steps=n_steps
-                )
-            except Exception as e:
-                # Skip if numba not available
-                if 'numba' in str(e):
-                    pass
-                else:
-                    raise
-            
-        elif augmentation_type == 'noise':
-            # Add white noise (SNR between 10-30 dB)
-            noise_factor = np.random.uniform(0.001, 0.01)
-            noise = np.random.randn(len(audio)) * noise_factor
-            audio = audio + noise
-            
-        elif augmentation_type == 'time_shift':
-            # Random time shifting
-            shift = np.random.randint(-self.target_sr, self.target_sr)
-            audio = np.roll(audio, shift)
-        
-        elif augmentation_type == 'environmental_mix':
-            # Mix with environmental sounds (wind, rain) for realistic field conditions
-            audio = self._mix_environmental_sound(audio)
-            
-        return audio
-    
-    def _mix_environmental_sound(self, audio: np.ndarray) -> np.ndarray:
-        """
-        Mix audio with environmental sounds (wind/rain) to simulate forest conditions.
-        
-        Args:
-            audio: Input audio waveform (threat sound)
-            
-        Returns:
-            Audio mixed with environmental background
-        """
-        # Collect environmental sound files (wind_rain category)
-        env_dir = self.data_dir / 'BACKGROUND' / 'wind_rain'
-        
-        if not env_dir.exists():
-            # If wind_rain not available, try ambient_noise
-            env_dir = self.data_dir / 'BACKGROUND' / 'ambient_noise'
-            if not env_dir.exists():
-                return audio  # Return original if no environmental sounds available
-        
-        # Get list of environmental sound files
-        env_files = list(env_dir.glob('*.wav'))
-        
-        if len(env_files) == 0:
-            return audio  # No environmental sounds available
-        
-        # Randomly select an environmental sound
-        env_file = np.random.choice(env_files)
-        
-        try:
-            # Load environmental sound
-            env_audio, sr = sf.read(str(env_file), dtype='float32')
-            
-            # Convert to mono if stereo
-            if len(env_audio.shape) > 1:
-                env_audio = np.mean(env_audio, axis=1)
-            
-            # Resample if needed
-            if sr != self.target_sr:
-                env_audio = librosa.resample(env_audio, orig_sr=sr, target_sr=self.target_sr)
-            
-            env_audio = self.standardize_audio(env_audio)
-            env_audio = self.normalize_audio(env_audio)
-            
-            # Random mixing ratio (environmental sound should be quieter than threat)
-            # SNR between 5-15 dB (threat sound louder than environment)
-            snr_db = np.random.uniform(5, 15)
-            
-            # Calculate power of signals
-            signal_power = np.mean(audio ** 2)
-            env_power = np.mean(env_audio ** 2)
-            
-            # Calculate scaling factor for environmental sound
-            snr_linear = 10 ** (snr_db / 10)
-            scale = np.sqrt(signal_power / (snr_linear * env_power))
-            
-            # Mix signals
-            mixed_audio = audio + (env_audio * scale)
-            
-            # Normalize to prevent clipping
-            mixed_audio = self.normalize_audio(mixed_audio)
-            
-            return mixed_audio
-            
-        except Exception as e:
-            # If mixing fails, return original audio
-            return audio
-    
-    def process_file(
-        self,
-        file_path: Path,
-        threat_level: str,
-        subcategory: str,
-        apply_augmentation: bool = False
-    ) -> Optional[Dict]:
-        """
-        Process a single audio file and extract features.
-        
-        Args:
-            file_path: Path to audio file
-            threat_level: Threat level (THREAT, THREAT_CONTEXT, BACKGROUND)
-            subcategory: Subcategory (e.g., gunshot, dog_bark, wind_rain)
-            apply_augmentation: Whether to apply data augmentation
-            
-        Returns:
-            Dictionary containing processed features and labels
-        """
-        # Load audio
-        audio, sr = self.load_audio(str(file_path))
-        if audio is None:
-            return None
-        
-        # Standardize and normalize
-        audio = self.standardize_audio(audio)
-        audio = self.normalize_audio(audio)
-        
-        # Apply augmentation if requested
-        if apply_augmentation:
-            # Smart augmentation selection based on threat level
-            if threat_level in ['THREAT', 'THREAT_CONTEXT']:
-                # Higher priority threats: prioritize environmental mixing (2x weight)
-                aug_type = np.random.choice([
-                    'time_stretch', 'pitch_shift', 'noise', 'time_shift',
-                    'environmental_mix', 'environmental_mix', None
-                ])
-            else:
-                # Background sounds: standard augmentation (no environmental mixing needed)
-                aug_type = np.random.choice([
-                    'time_stretch', 'pitch_shift', 'noise', 'time_shift', None
-                ])
-            
-            if aug_type:
-                audio = self.augment_audio(audio, aug_type)
-        
-        # Extract features
-        features = self.extract_features(audio)
-        
-        # Create label
-        label = {
-            'threat_level': self.threat_levels[threat_level],
-            'threat_level_name': threat_level,
-            'subcategory': subcategory,
-            'file_name': file_path.name
-        }
-        
-        return {
-            'features': features,
-            'label': label
-        }
-    
-    def collect_dataset(self) -> List[Tuple[Path, str, str]]:
-        """
-        Collect all audio file paths with their labels.
-        
-        Returns:
-            List of tuples (file_path, threat_level, subcategory)
-        """
-        dataset = []
-        
-        for threat_level in self.threat_levels.keys():
-            threat_dir = self.data_dir / threat_level
-            
-            if not threat_dir.exists():
-                print(f"Warning: {threat_dir} does not exist. Skipping.")
+        dec = np.frombuffer(result.stdout, dtype=np.float32)
+        if len(dec) >= len(audio):
+            return dec[: len(audio)].copy()
+        return np.pad(dec, (0, len(audio) - len(dec))).copy()
+    except Exception:
+        return audio.copy()
+    finally:
+        for p in [in_path, mp3_path]:
+            if p:
+                Path(p).unlink(missing_ok=True)
+
+
+def _apply_noise(audio: np.ndarray, severity: float,
+                 snr_lo: float, snr_hi: float) -> np.ndarray:
+    snr_db = random.uniform(snr_lo, snr_hi)
+    if _g_noise_pool and random.random() < 0.7:
+        bg = random.choice(_g_noise_pool)
+        if len(bg) < len(audio):
+            bg = np.tile(bg, int(np.ceil(len(audio) / len(bg))))
+        bg = ebu_r128_normalize(bg[: len(audio)])
+    else:
+        bg = np.random.randn(len(audio)).astype(np.float32)
+    sig_p = np.mean(audio ** 2) + 1e-10
+    noi_p = np.mean(bg    ** 2) + 1e-10
+    scale = np.sqrt(sig_p / (noi_p * 10 ** (snr_db / 10)))
+    return np.clip(audio + bg * scale, -1.0, 1.0).astype(np.float32)
+
+
+def _apply_gain(audio: np.ndarray, severity: float) -> np.ndarray:
+    db = random.uniform(-severity * 12.0, severity * 12.0)
+    return np.clip(audio * 10 ** (db / 20), -1.0, 1.0).astype(np.float32)
+
+
+def _apply_clip(audio: np.ndarray, severity: float) -> np.ndarray:
+    threshold = max(0.1, 1.0 - severity * 0.6)
+    return np.clip(audio, -threshold, threshold).astype(np.float32)
+
+
+# ── compound augmentation ─────────────────────────────────────────────────────
+
+_FX_POOL      = ["noise", "rir", "lowpass", "mp3", "gain", "clip"]
+_INCOMPATIBLE = frozenset([("rir", "clip"), ("clip", "rir")])
+
+
+def _sample_fx(min_fx: int, max_fx: int) -> list[str]:
+    n    = random.randint(min_fx, min(max_fx, len(_FX_POOL)))
+    pool = list(_FX_POOL)
+    random.shuffle(pool)
+    chosen: list[str] = []
+    for fx in pool:
+        if len(chosen) >= n:
+            break
+        if any((fx, ex) in _INCOMPATIBLE for ex in chosen):
+            continue
+        chosen.append(fx)
+    return chosen
+
+
+def compound_augment(audio: np.ndarray, phase: str) -> list[np.ndarray]:
+    cfg  = PHASE_CFG[phase]
+    sev  = cfg["severity"]
+    outs = []
+    for _ in range(cfg["copies"]):
+        out = audio.copy()
+        for fx in _sample_fx(cfg["min_fx"], cfg["max_fx"]):
+            if   fx == "noise":   out = _apply_noise(out, sev, cfg["snr_lo"], cfg["snr_hi"])
+            elif fx == "rir":     out = _apply_rir(out, sev)
+            elif fx == "lowpass": out = _apply_lowpass(out, sev)
+            elif fx == "mp3":     out = _apply_mp3(out, sev)
+            elif fx == "gain":    out = _apply_gain(out, sev)
+            elif fx == "clip":    out = _apply_clip(out, sev)
+        outs.append(out)
+    return outs
+
+
+# ── feature extraction ────────────────────────────────────────────────────────
+
+def extract_mel(audio: np.ndarray) -> np.ndarray:
+    S = librosa.feature.melspectrogram(
+        y=audio, sr=SR, n_mels=N_MELS,
+        n_fft=N_FFT, hop_length=HOP_STFT,
+        win_length=WIN_LENGTH, window="hann",
+        fmax=SR // 2,
+    )
+    return librosa.power_to_db(S, ref=np.max).astype(np.float32)
+
+
+def extract_mfcc_delta(audio: np.ndarray) -> np.ndarray:
+    m  = librosa.feature.mfcc(
+        y=audio, sr=SR, n_mfcc=N_MFCC,
+        n_fft=N_FFT, hop_length=HOP_STFT,
+        win_length=WIN_LENGTH,
+    )
+    d  = librosa.feature.delta(m)
+    dd = librosa.feature.delta(m, order=2)
+    return np.concatenate([m, d, dd], axis=0).astype(np.float32)  # (120, T)
+
+
+# ── spectrogram augmentations ─────────────────────────────────────────────────
+
+def spec_augment(spec: np.ndarray,
+                 n_time: int = 2, t_max: int = 40,
+                 n_freq: int = 2, f_max: int = 20) -> np.ndarray:
+    out  = spec.copy()
+    fill = float(out.mean())
+    F, T = out.shape
+    for _ in range(n_freq):
+        f  = random.randint(0, f_max)
+        f0 = random.randint(0, max(0, F - f))
+        out[f0: f0 + f, :] = fill
+    for _ in range(n_time):
+        t  = random.randint(0, t_max)
+        t0 = random.randint(0, max(0, T - t))
+        out[:, t0: t0 + t] = fill
+    return out
+
+
+def filter_augment(mel: np.ndarray, n_ctrl: int = 5, max_db: float = 6.0) -> np.ndarray:
+    F     = mel.shape[0]
+    ctrl  = np.random.uniform(-max_db, max_db, n_ctrl)
+    curve = np.interp(np.arange(F), np.linspace(0, F - 1, n_ctrl), ctrl)
+    return (mel + curve[:, None]).astype(np.float32)
+
+
+# ── mixup utility (call from DataLoader, not here) ────────────────────────────
+
+def mixup_batch(X1: np.ndarray, y1: np.ndarray,
+                X2: np.ndarray, y2: np.ndarray,
+                alpha: float = 0.4) -> tuple[np.ndarray, np.ndarray]:
+    lam = np.random.beta(alpha, alpha)
+    return lam * X1 + (1 - lam) * X2, lam * y1 + (1 - lam) * y2
+
+
+# ── learnability filter stub ──────────────────────────────────────────────────
+
+def learnability_ok(audio: np.ndarray) -> bool:
+    return True  # stub: pass all clips until Conv-AE (Stage 4a) is trained
+
+
+# ── worker functions ──────────────────────────────────────────────────────────
+
+def _process_file(args: tuple) -> list[dict]:
+    cls, path_str, do_dir, do_specaug = args
+    audio = load_mono(Path(path_str))
+    if audio is None:
+        return []
+    audio = ebu_r128_normalize(audio)
+    if do_dir and _g_ir is not None:
+        audio = ebu_r128_normalize(dir_calibrate(audio, _g_ir))
+
+    label = FOLDER_TO_LABEL[cls]
+    meta  = f"{cls}|{Path(path_str).relative_to(REPO_ROOT)}"
+    out   = []
+    for win in slice_windows(audio):
+        mel  = extract_mel(win)
+        mfcc = extract_mfcc_delta(win)
+        if do_specaug:
+            mel = spec_augment(mel)
+        out.append({"mel": mel, "mfcc": mfcc, "label": label, "meta": meta})
+    return out
+
+
+def _process_file_aug(args: tuple) -> list[dict]:
+    cls, path_str, phase, do_dir = args
+    audio = load_mono(Path(path_str))
+    if audio is None:
+        return []
+    audio = ebu_r128_normalize(audio)
+    if do_dir and _g_ir is not None:
+        audio = ebu_r128_normalize(dir_calibrate(audio, _g_ir))
+
+    label = FOLDER_TO_LABEL[cls]
+    meta  = f"{cls}|{Path(path_str).relative_to(REPO_ROOT)}|aug_{phase}"
+    out   = []
+    for win in slice_windows(audio):
+        for aug in compound_augment(win, phase):
+            if not learnability_ok(aug):
                 continue
-            
-            for subcategory in self.categories[threat_level]:
-                subcat_dir = threat_dir / subcategory
-                
-                if not subcat_dir.exists():
-                    print(f"Warning: {subcat_dir} does not exist. Skipping.")
-                    continue
-                
-                # Collect all .wav files (including subdirectories for animal_sound)
-                wav_files = list(subcat_dir.glob('**/*.wav'))
-                
-                for wav_file in wav_files:
-                    dataset.append((wav_file, threat_level, subcategory))
-        
-        return dataset
-    
-    def preprocess_dataset(
-        self,
-        output_dir: str,
-        test_size: float = 0.15,
-        val_size: float = 0.15,
-        apply_augmentation: bool = True,
-        augmentation_factor: int = 2
-    ):
-        """
-        Preprocess entire dataset and save to disk.
-        
-        Args:
-            output_dir: Directory to save preprocessed data
-            test_size: Proportion of data for testing
-            val_size: Proportion of training data for validation
-            apply_augmentation: Whether to apply data augmentation
-            augmentation_factor: How many augmented versions to create per sample
-        """
-        output_path = Path(output_dir)
-        output_path.mkdir(parents=True, exist_ok=True)
-        
-        print("Collecting dataset...")
-        dataset = self.collect_dataset()
-        print(f"Found {len(dataset)} audio files")
-        
-        # Display dataset statistics
-        print("\nDataset Statistics:")
-        for threat_level in self.threat_levels.keys():
-            count = sum(1 for _, tl, _ in dataset if tl == threat_level)
-            print(f"  {threat_level}: {count} files")
-            for subcategory in self.categories[threat_level]:
-                subcat_count = sum(
-                    1 for _, tl, sc in dataset if tl == threat_level and sc == subcategory
-                )
-                print(f"    - {subcategory}: {subcat_count} files")
-        
-        # Split dataset into train/val/test
-        print("\nSplitting dataset...")
-        train_val, test = train_test_split(
-            dataset, test_size=test_size, random_state=self.random_seed, shuffle=True
-        )
-        train, val = train_test_split(
-            train_val, test_size=val_size, random_state=self.random_seed, shuffle=True
-        )
-        
-        print(f"Train: {len(train)} files")
-        print(f"Validation: {len(val)} files")
-        print(f"Test: {len(test)} files")
-        
-        # Process each split
-        splits = {
-            'train': train,
-            'val': val,
-            'test': test
-        }
-        
-        for split_name, split_data in splits.items():
-            print(f"\nProcessing {split_name} split...")
-            
-            processed_data = []
-            
-            # Process original files
-            for file_path, threat_level, subcategory in tqdm(split_data, desc=f"{split_name} (original)"):
-                result = self.process_file(file_path, threat_level, subcategory, apply_augmentation=False)
-                if result:
-                    processed_data.append(result)
-            
-            # Apply augmentation only to training data
-            if split_name == 'train' and apply_augmentation:
-                print(f"Applying augmentation (factor: {augmentation_factor})...")
-                for _ in range(augmentation_factor):
-                    for file_path, threat_level, subcategory in tqdm(split_data, desc=f"{split_name} (augmented)"):
-                        result = self.process_file(file_path, threat_level, subcategory, apply_augmentation=True)
-                        if result:
-                            processed_data.append(result)
-            
-            # Save processed data
-            split_output = output_path / f"{split_name}_data.pkl"
-            with open(split_output, 'wb') as f:
-                pickle.dump(processed_data, f)
-            
-            print(f"Saved {len(processed_data)} samples to {split_output}")
-        
-        # Save preprocessing configuration
-        config = {
-            'target_sr': self.target_sr,
-            'duration': self.duration,
-            'target_length': self.target_length,
-            'n_mels': self.n_mels,
-            'n_mfcc': self.n_mfcc,
-            'n_fft': self.n_fft,
-            'hop_length': self.hop_length,
-            'threat_levels': self.threat_levels,
-            'categories': self.categories,
-            'dataset_stats': {
-                'total_files': len(dataset),
-                'train_size': len(train) * (1 + augmentation_factor if apply_augmentation else 1),
-                'val_size': len(val),
-                'test_size': len(test)
-            }
-        }
-        
-        config_path = output_path / 'preprocessing_config.json'
-        with open(config_path, 'w') as f:
-            json.dump(config, f, indent=2)
-        
-        print(f"\nPreprocessing complete! Configuration saved to {config_path}")
-        print(f"Preprocessed data saved to {output_path}")
+            mel  = extract_mel(aug)
+            mfcc = extract_mfcc_delta(aug)
+            mel  = spec_augment(mel)
+            mel  = filter_augment(mel)
+            out.append({"mel": mel, "mfcc": mfcc, "label": label, "meta": meta})
+    return out
 
 
-def main():
-    """
-    Main function to run preprocessing pipeline.
-    """
-    # Configuration
-    DATA_DIR = "/Users/cococe/Desktop/AUDIOSET METADATA"
-    OUTPUT_DIR = "/Users/cococe/Desktop/AUDIOSET METADATA/preprocessed_data"
-    
-    # Initialize preprocessor
-    preprocessor = AudioPreprocessor(
-        data_dir=DATA_DIR,
-        target_sr=22050,      # Standard audio sample rate
-        duration=10.0,         # 10-second clips
-        n_mels=128,           # 128 mel bands for detailed frequency representation
-        n_mfcc=40,            # 40 MFCCs for compact representation
-        n_fft=2048,           # FFT window size
-        hop_length=512,       # Hop length for STFT
-        random_seed=42        # For reproducibility
-    )
-    
-    # Run preprocessing
-    preprocessor.preprocess_dataset(
-        output_dir=OUTPUT_DIR,
-        test_size=0.15,           # 15% for testing
-        val_size=0.15,            # 15% of training for validation
-        apply_augmentation=True,  # Apply data augmentation
-        augmentation_factor=2     # Create 2x augmented versions per training sample
-    )
-    
-    print("\n✅ Audio preprocessing completed successfully!")
-    print(f"📁 Preprocessed data ready at: {OUTPUT_DIR}")
-    print("\nNext steps:")
-    print("1. Review the preprocessing_config.json file")
-    print("2. Load the preprocessed data for model training")
-    print("3. Build and train your threat detection model")
+# ── dataset collection ────────────────────────────────────────────────────────
+
+def collect_files() -> dict[str, list[Path]]:
+    files: dict[str, list[Path]] = defaultdict(list)
+    for folder in sorted(DATASET_DIR.iterdir()):
+        if not folder.is_dir():
+            continue
+        cls = folder.name
+        if cls not in FOLDER_TO_LABEL:
+            print(f"  skipping unmapped folder: {cls}")
+            continue
+        found = sorted(f for f in folder.iterdir() if f.suffix.lower() in AUDIO_EXTS)
+        files[cls].extend(found)
+        print(f"  {cls:<26}  {len(found):>5} files")
+    return files
+
+
+def make_splits(files: dict[str, list[Path]]) -> dict[str, list[tuple[str, Path]]]:
+    if SPLITS_JSON.exists():
+        data      = json.loads(SPLITS_JSON.read_text())
+        all_paths = [p for recs in data.values() for _, p in recs]
+        if all(Path(p).exists() for p in all_paths):
+            print("  Loaded stable splits from splits.json")
+            return {s: [(c, Path(p)) for c, p in recs] for s, recs in data.items()}
+        print("  splits.json stale (files moved?), rebuilding …")
+
+    all_items = [(cls, p) for cls, paths in sorted(files.items()) for p in paths]
+    strat     = [cls for cls, _ in all_items]
+    idx       = list(range(len(all_items)))
+
+    idx_tv, idx_te = train_test_split(idx, test_size=0.20,
+                                      stratify=strat, random_state=SEED)
+    idx_tr, idx_va = train_test_split(idx_tv, test_size=0.25,
+                                      stratify=[strat[i] for i in idx_tv],
+                                      random_state=SEED)
+
+    splits = {
+        "train": [all_items[i] for i in idx_tr],
+        "val":   [all_items[i] for i in idx_va],
+        "test":  [all_items[i] for i in idx_te],
+    }
+    SPLITS_JSON.parent.mkdir(parents=True, exist_ok=True)
+    SPLITS_JSON.write_text(json.dumps(
+        {s: [(c, str(p)) for c, p in recs] for s, recs in splits.items()}, indent=2))
+    print("  Saved stable splits to splits.json")
+    return splits
+
+
+# ── shard writer ──────────────────────────────────────────────────────────────
+
+class ShardWriter:
+    def __init__(self, mel_dir: Path, mfcc_dir: Path, shard_size: int):
+        mel_dir.mkdir(parents=True, exist_ok=True)
+        mfcc_dir.mkdir(parents=True, exist_ok=True)
+        self._mel_dir  = mel_dir
+        self._mfcc_dir = mfcc_dir
+        self._size     = shard_size
+        self._buf: list[dict] = []
+        self._idx  = 0
+        self.total = 0
+
+    def add(self, rec: dict) -> None:
+        self._buf.append(rec)
+        self.total += 1
+        if len(self._buf) >= self._size:
+            self._flush()
+
+    def _flush(self) -> None:
+        if not self._buf:
+            return
+        tag  = f"shard_{self._idx:03d}"
+        mel  = np.stack([r["mel"]   for r in self._buf])
+        mfcc = np.stack([r["mfcc"]  for r in self._buf])
+        y    = np.array([r["label"] for r in self._buf], dtype=np.int8)
+        meta = np.array([r["meta"]  for r in self._buf], dtype=object)
+        np.savez_compressed(self._mel_dir  / f"{tag}.npz", X=mel,  y=y, meta=meta)
+        np.savez_compressed(self._mfcc_dir / f"{tag}.npz", X=mfcc, y=y, meta=meta)
+        self._buf.clear()
+        self._idx += 1
+
+    def close(self) -> None:
+        self._flush()
+
+
+# ── split processing ──────────────────────────────────────────────────────────
+
+def process_split(name: str, items: list[tuple[str, Path]],
+                  mel_base: Path, mfcc_base: Path,
+                  shard_size: int, noise_paths: list[str],
+                  ir_path: str | None, phases: list[str]) -> dict:
+    do_dir     = ir_path is not None
+    do_specaug = name == "train"
+    n_workers  = min(4, os.cpu_count() or 4)
+
+    # clean split
+    writer     = ShardWriter(mel_base / name, mfcc_base / name, shard_size)
+    clean_args = [(cls, str(p), do_dir, do_specaug) for cls, p in items]
+    with ProcessPoolExecutor(max_workers=n_workers,
+                             initializer=_init_worker,
+                             initargs=(noise_paths, ir_path)) as ex:
+        futs = {ex.submit(_process_file, a): a for a in clean_args}
+        for fut in tqdm(as_completed(futs), total=len(futs),
+                        desc=f"  {name:<12} clean"):
+            for rec in fut.result():
+                writer.add(rec)
+    writer.close()
+    counts = {"clean": writer.total}
+
+    if name != "train" or not phases:
+        return counts
+
+    for phase in phases:
+        aug_writer = ShardWriter(
+            mel_base  / f"train_aug_{phase}",
+            mfcc_base / f"train_aug_{phase}",
+            shard_size,
+        )
+        aug_args = [(cls, str(p), phase, do_dir) for cls, p in items]
+        cfg  = PHASE_CFG[phase]
+        desc = (f"  train_aug_{phase}  "
+                f"(fx {cfg['min_fx']}–{cfg['max_fx']}, "
+                f"sev {cfg['severity']}, ×{cfg['copies']})")
+        with ProcessPoolExecutor(max_workers=n_workers,
+                                 initializer=_init_worker,
+                                 initargs=(noise_paths, ir_path)) as ex:
+            futs = {ex.submit(_process_file_aug, a): a for a in aug_args}
+            for fut in tqdm(as_completed(futs), total=len(futs), desc=desc):
+                for rec in fut.result():
+                    aug_writer.add(rec)
+        aug_writer.close()
+        counts[f"aug_{phase}"] = aug_writer.total
+
+    return counts
+
+
+# ── entry point ───────────────────────────────────────────────────────────────
+
+def main() -> None:
+    ap = argparse.ArgumentParser(
+        description="Alertreck Stage 2 — compound augmentation + curriculum preprocessing")
+    ap.add_argument("--aug-phase",  nargs="*", choices=["A", "B", "C"],
+                    default=[], metavar="PHASE",
+                    help="Curriculum phases to generate (A B C). Default: none (clean only).")
+    ap.add_argument("--dir-ir",     type=Path, default=None,
+                    help="Deployment USB microphone IR WAV for DIR calibration (step 5).")
+    ap.add_argument("--conv-ae",    type=Path, default=None,
+                    help="Trained Conv-AE ONNX for learnability filter stub (step 6e).")
+    ap.add_argument("--shard-size", type=int,  default=1000)
+    args = ap.parse_args()
+
+    random.seed(SEED)
+    np.random.seed(SEED)
+
+    phases = args.aug_phase or []
+    print("=== Alertreck Stage 2 — Compound Augmentation Pipeline ===")
+    print(f"SR={SR} Hz  win={WIN_LENGTH} ({WIN_LENGTH/SR*1000:.1f} ms)  "
+          f"hop={HOP_STFT} ({HOP_STFT/SR*1000:.1f} ms)  "
+          f"n_fft={N_FFT}  EBU={20*np.log10(EBU_TARGET):.0f} dBFS")
+    print(f"Curriculum phases : {phases or 'none (clean splits only)'}")
+    if args.conv_ae:
+        print("Learnability filter: stub (wire after Stage 4a Conv-AE training)")
+    print()
+
+    # impulse response
+    ir_path: str | None = None
+    if args.dir_ir:
+        test_ir = load_mono(args.dir_ir)
+        if test_ir is None:
+            print(f"WARNING: could not load IR {args.dir_ir} — skipping DIR calibration")
+        else:
+            ir_path = str(args.dir_ir)
+            print(f"DIR IR: {args.dir_ir.name}  ({len(test_ir)/SR*1000:.1f} ms)\n")
+
+    # noise pool paths (loaded inside each worker via _init_worker)
+    noise_paths: list[str] = []
+    noise_dir = DATASET_DIR / "background_wind_rain"
+    if noise_dir.exists():
+        nfiles      = sorted(f for f in noise_dir.iterdir()
+                             if f.suffix.lower() in AUDIO_EXTS)
+        sampled     = random.sample(nfiles, min(100, len(nfiles)))
+        noise_paths = [str(f) for f in sampled]
+    print(f"Noise pool : {len(noise_paths)} wind-rain clips (loaded per worker)\n")
+
+    # file inventory + stable splits
+    print("Scanning dataset …")
+    files = collect_files()
+    print(f"Total files: {sum(len(v) for v in files.values())}\n")
+
+    splits = make_splits(files)
+    print()
+    for s, recs in splits.items():
+        cnt = Counter(cls for cls, _ in recs)
+        print(f"  {s:<6}  {len(recs):>5} files  " +
+              "  ".join(f"{c}:{n}" for c, n in sorted(cnt.items())))
+    print()
+
+    mel_base  = OUT_ROOT / "mel"
+    mfcc_base = OUT_ROOT / "mfcc"
+
+    manifest: dict = {
+        "seed": SEED, "sample_rate": SR,
+        "clip_seconds": CLIP_LEN, "hop_seconds": HOP_LEN,
+        "n_mels": N_MELS, "n_mfcc": N_MFCC,
+        "n_fft": N_FFT, "win_length": WIN_LENGTH, "hop_stft": HOP_STFT,
+        "ebu_target_dbfs": -23,
+        "spec_augment_train": True,
+        "filter_augment_aug": True,
+        "curriculum_phases": phases,
+        "dir_calibration_ir": ir_path,
+        "label_map":   FOLDER_TO_LABEL,
+        "label_names": {str(k): v for k, v in LABEL_NAMES.items()},
+        "splits": {},
+    }
+
+    for name, items in splits.items():
+        print(f"[{name.upper()}] — {len(items)} files")
+        counts = process_split(name, items, mel_base, mfcc_base,
+                               args.shard_size, noise_paths, ir_path, phases)
+        manifest["splits"][name] = counts
+        for k, v in counts.items():
+            print(f"  {k}: {v:,} windows")
+        print()
+
+    manifest["script_sha256"] = hashlib.sha256(
+        Path(__file__).read_bytes()).hexdigest()
+
+    manifest_path = OUT_ROOT / "manifest.json"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(json.dumps(manifest, indent=2))
+    print(f"Manifest → {manifest_path.relative_to(REPO_ROOT)}")
+    print("=== Stage 2 complete ===")
 
 
 if __name__ == "__main__":

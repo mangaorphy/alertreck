@@ -1,19 +1,71 @@
 """
 Alert Notifier Module
 ======================
-Generates and dispatches alerts to various notification channels.
-Includes stubs for LoRaWAN, GSM, and Satellite communication.
+Generates and dispatches alerts via console, disk, and SIM808 GSM SMS.
+SMS payload: ALERTRECK | <class> | Conf: x% | GPS: lat,lon | HH:MM
 """
 
 import json
-from typing import Dict, Any
+import time
+from datetime import datetime, timezone
+from typing import Dict, Any, Optional
 from pathlib import Path
 
 from ..config import (
     ALERTS_DIR, DEVICE_ID, DEVICE_LOCATION,
-    NOTIFY_CONSOLE, NOTIFY_LORA, NOTIFY_GSM, NOTIFY_SATELLITE
+    NOTIFY_CONSOLE, NOTIFY_LORA, NOTIFY_GSM, NOTIFY_SATELLITE,
+    SIM808_PORT, SIM808_BAUDRATE, SIM808_TIMEOUT,
+    RANGER_PHONE_NUMBERS, SMS_MAX_RETRIES, SMS_RETRY_DELAY,
 )
 from ..utils import get_timestamp, generate_alert_id, save_json, format_confidence, format_coords
+
+try:
+    import serial
+    _SERIAL_AVAILABLE = True
+except ImportError:
+    _SERIAL_AVAILABLE = False
+
+
+def _sim808_at(ser, cmd: str, expected: str = "OK", timeout: float = 5.0) -> bool:
+    """Send one AT command and wait for expected response."""
+    ser.write((cmd + "\r\n").encode())
+    deadline = time.time() + timeout
+    buf = ""
+    while time.time() < deadline:
+        chunk = ser.read(ser.in_waiting or 1).decode("ascii", errors="ignore")
+        buf += chunk
+        if expected in buf:
+            return True
+        if "ERROR" in buf:
+            return False
+    return False
+
+
+def _sim808_send_sms(number: str, text: str,
+                     port: str, baudrate: int, timeout: float) -> bool:
+    """Send one SMS via SIM808 AT commands. Returns True on success."""
+    with serial.Serial(port, baudrate, timeout=2.0) as ser:
+        time.sleep(0.5)
+        if not _sim808_at(ser, "AT"):
+            raise RuntimeError("SIM808 not responding to AT")
+        if not _sim808_at(ser, "AT+CMGF=1"):   # text mode
+            raise RuntimeError("Could not set SMS text mode")
+        ser.write(f'AT+CMGS="{number}"\r'.encode())
+        time.sleep(0.5)
+        buf = ser.read(ser.in_waiting or 1).decode("ascii", errors="ignore")
+        if ">" not in buf:
+            raise RuntimeError("No SMS prompt received")
+        ser.write(text.encode() + bytes([26]))   # message + Ctrl-Z
+        deadline = time.time() + timeout
+        buf = ""
+        while time.time() < deadline:
+            chunk = ser.read(ser.in_waiting or 1).decode("ascii", errors="ignore")
+            buf += chunk
+            if "+CMGS:" in buf:
+                return True
+            if "ERROR" in buf:
+                return False
+        return False
 
 
 class AlertNotifier:
@@ -197,29 +249,41 @@ class AlertNotifier:
         return True
     
     def _notify_gsm(self, alert: Dict[str, Any]) -> bool:
-        """
-        Send alert via GSM/SMS.
-        
-        STUB IMPLEMENTATION - To be completed with actual GSM module.
-        
-        For real implementation:
-        - Use GSM module (e.g., SIM800L, SIM7000)
-        - Send SMS to ranger phone numbers
-        - Include critical info: threat type, location, confidence
-        - Handle delivery confirmation
-        """
-        print(f"📱 [GSM STUB] Would send SMS for alert {alert['alert_id']}")
-        
-        # Example SMS format:
-        sms_text = (
-            f"ALERT: {alert['threat_type']} "
-            f"at {alert['latitude']}, {alert['longitude']} "
-            f"({format_confidence(alert['confidence'])})"
+        """Send SMS alert via SIM808 GSM module using AT commands."""
+        if not RANGER_PHONE_NUMBERS:
+            print("GSM: no ranger phone numbers configured in config.py")
+            return False
+
+        lat  = alert.get("latitude",  "?")
+        lon  = alert.get("longitude", "?")
+        conf = int(alert["confidence"] * 100)
+        hhmm = datetime.now(timezone.utc).strftime("%H:%M")
+        gps_str = f"{lat:.5f},{lon:.5f}" if isinstance(lat, float) else "no fix"
+        sms = (
+            f"ALERTRECK | {alert['threat_type']} | "
+            f"Conf: {conf}% | GPS: {gps_str} | {hhmm}"
         )
-        print(f"   SMS: {sms_text}")
-        
-        # Simulate success for testing
-        return True
+
+        if not _SERIAL_AVAILABLE:
+            print(f"GSM: pyserial not installed — would send: {sms}")
+            return False
+
+        success = False
+        for number in RANGER_PHONE_NUMBERS:
+            for attempt in range(1, SMS_MAX_RETRIES + 1):
+                try:
+                    if _sim808_send_sms(number, sms, SIM808_PORT,
+                                        SIM808_BAUDRATE, SIM808_TIMEOUT):
+                        print(f"GSM: SMS sent to {number} ({attempt} attempt(s))")
+                        success = True
+                        break
+                except Exception as exc:
+                    print(f"GSM: attempt {attempt} failed — {exc}")
+                if attempt < SMS_MAX_RETRIES:
+                    time.sleep(SMS_RETRY_DELAY)
+            else:
+                print(f"GSM: all {SMS_MAX_RETRIES} attempts failed for {number}")
+        return success
     
     def _notify_satellite(self, alert: Dict[str, Any]) -> bool:
         """

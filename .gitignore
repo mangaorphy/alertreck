@@ -58,22 +58,37 @@ ENV/
 .DS_Store
 Thumbs.db
 
-# Model files (large)
+# Model files (large binaries)
 *.h5
 *.keras
 *.tflite
 *.pb
+*.pt
+*.onnx
 saved_model/
+models/custom_cnn/best_model.pt
+models/custom_cnn/alertreck_cnn.onnx
+models/tiny_ast/
 
-# Data files (large)
+# Dataset and processed data (large)
+dataset/
+data/
+ESC-50-master/
+
+# Audio files (large)
 *.wav
 *.mp3
 *.flac
+*.ogg
+*.m4a
+
+# CSV data files (large) — keep only metadata CSVs
 *.csv
-!class_labels_indices.csv
-!balanced_train_segments.csv
-!eval_segments.csv
-!unbalanced_train_segments.csv
+!META_DATA_CSV/class_labels_indices.csv
+!META_DATA_CSV/balanced_train_segments.csv
+!META_DATA_CSV/eval_segments.csv
+!META_DATA_CSV/unbalanced_train_segments.csv
+!META_DATA_CSV/ff1010bird_metadata_2018.csv
 
 # Logs
 *.log

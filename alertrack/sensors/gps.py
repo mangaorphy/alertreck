@@ -1,8 +1,14 @@
 """
 GPS Module
 ==========
-Handles GPS coordinate reading from UART/USB GPS modules.
-Parses NMEA sentences and provides location data for alerts.
+Reads GPS coordinates from the SIM808 GSM/GPRS/GPS module via UART serial.
+
+SIM808 setup (run once after power-on):
+  AT+CGNSPWR=1    — power on built-in GPS
+  AT+CGNSOUT=1    — stream NMEA sentences ($GPGGA, $GPRMC) on UART
+
+The GPSReader class parses those NMEA sentences directly.
+Alternative: use SIM808AT.get_location() which polls AT+CGNSINF instead.
 """
 
 import time
@@ -371,6 +377,55 @@ class GPSReader:
             'longitude': self.longitude,
             'satellites': self.num_satellites
         }
+
+
+class SIM808AT:
+    """
+    Alternative GPS reader that polls AT+CGNSINF instead of parsing NMEA.
+    Use when the SIM808 UART is shared with AT commands and streaming NMEA
+    would interfere with SMS transmission.
+
+    Response format:
+      +CGNSINF: <mode>,<fix>,<datetime>,<lat>,<lon>,<alt>,<speed>,<course>,...
+    """
+
+    def __init__(self, port: str = None, baudrate: int = None):
+        from ..config import SIM808_PORT, SIM808_BAUDRATE, SIM808_TIMEOUT
+        self.port     = port     or SIM808_PORT
+        self.baudrate = baudrate or SIM808_BAUDRATE
+        self.timeout  = SIM808_TIMEOUT
+
+    def get_location(self) -> Dict:
+        """Poll SIM808 for GPS fix via AT+CGNSINF. Returns location dict."""
+        if not SERIAL_AVAILABLE:
+            return {"latitude": "UNKNOWN", "longitude": "UNKNOWN",
+                    "altitude": "UNKNOWN", "fix_quality": 0, "satellites": 0}
+        try:
+            with serial.Serial(self.port, self.baudrate, timeout=2.0) as ser:
+                ser.write(b"AT+CGNSINF\r\n")
+                time.sleep(0.5)
+                raw = ser.read(ser.in_waiting or 256).decode("ascii", errors="ignore")
+            line = next((l for l in raw.splitlines() if "+CGNSINF:" in l), None)
+            if not line:
+                return {"latitude": "UNKNOWN", "longitude": "UNKNOWN",
+                        "altitude": "UNKNOWN", "fix_quality": 0, "satellites": 0}
+            parts = line.split(":", 1)[1].strip().split(",")
+            fix   = int(parts[1]) if len(parts) > 1 else 0
+            if fix != 1:
+                return {"latitude": "UNKNOWN", "longitude": "UNKNOWN",
+                        "altitude": "UNKNOWN", "fix_quality": 0, "satellites": 0}
+            return {
+                "latitude":    float(parts[3]),
+                "longitude":   float(parts[4]),
+                "altitude":    float(parts[5]) if parts[5] else "UNKNOWN",
+                "fix_quality": 1,
+                "satellites":  int(parts[14]) if len(parts) > 14 and parts[14] else 0,
+                "timestamp":   time.time(),
+            }
+        except Exception as exc:
+            print(f"SIM808AT GPS error: {exc}")
+            return {"latitude": "UNKNOWN", "longitude": "UNKNOWN",
+                    "altitude": "UNKNOWN", "fix_quality": 0, "satellites": 0}
 
 
 if __name__ == "__main__":

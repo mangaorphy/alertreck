@@ -14,7 +14,7 @@ from typing import Optional, Callable
 
 from ..config import (
     SAMPLE_RATE, BUFFER_SIZE, CHANNELS, CHUNK_SIZE,
-    MICROPHONE_RECONNECT_DELAY, DEBUG_MODE
+    MICROPHONE_RECONNECT_DELAY, DEBUG_MODE, MIC_DEVICE_INDEX
 )
 
 
@@ -24,7 +24,7 @@ class AudioRecorder:
     Captures audio in chunks and maintains a fixed-size buffer.
     """
     
-    def __init__(self, device_id: Optional[int] = None):
+    def __init__(self, device_id: Optional[int] = MIC_DEVICE_INDEX):
         """
         Initialize audio recorder.
         

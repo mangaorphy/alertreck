@@ -1,0 +1,169 @@
+@startuml Alertreck_System_Architecture
+
+scale max 1200 width
+left to right direction
+skinparam linetype ortho
+
+<style>
+root {
+  FontName Times New Roman
+  FontSize 11
+  BackgroundColor #FFFFFF
+}
+
+rectangle {
+  FontName Times New Roman
+  FontSize 11
+  FontColor #1A2631
+  BorderColor #444441
+  BorderThickness 1
+  RoundCorner 8
+  Padding 8
+  BackgroundColor #F2F4F6
+}
+
+arrow {
+  FontName Times New Roman
+  FontSize 9
+  FontColor #444441
+  LineColor #444441
+  LineThickness 1
+}
+
+title {
+  FontName Times New Roman
+  FontSize 13
+  FontStyle bold
+  FontColor #1A2631
+}
+
+note {
+  FontName Times New Roman
+  FontSize 9
+  FontColor #444441
+  BackgroundColor #EBEBEB
+  BorderColor #888780
+}
+</style>
+
+title Figure 1 — Alertreck System Architecture\nFour Hardware and Software Layers
+
+' ══════════════════════════════════════════
+' LAYER 1 — SENSING
+' ══════════════════════════════════════════
+rectangle "Layer 1 — Sensing" as L1 #D3D1C7 {
+
+  rectangle "**ReSpeaker 4-Mic Array v2.0**\n\
+//GPIO hat mounted on Raspberry Pi 4//\n\
+4x MEMS channels · 100 Hz–16 kHz · 61 dB SNR\n\
+Circular array r ≈ 32.5 mm\n\
+Serves classification and GCC-PHAT pipelines" as MIC #EBEBEB
+
+}
+
+' ══════════════════════════════════════════
+' LAYER 2 — PROCESSING
+' ══════════════════════════════════════════
+rectangle "Layer 2 — Processing" as L2 #D3D1C7 {
+
+  rectangle "**Raspberry Pi 4 Model B**\n\
+4 GB RAM · ARM Cortex-A72 @ 1.8 GHz\n\
+Python 3.10 daemon · systemd service\n\
+TFLite INT8 · scikit-learn · torchaudio" as RPI #B4B2A9
+
+  rectangle "**Step 1 — Voice Activity Detection**\n\
+WebRTC VAD · librosa\n\
+Isolates events · discards silence" as VAD #EBEBEB
+
+  rectangle "**Step 2 — Feature Extraction**\n\
+librosa 0.10+\n\
+128-bin log-mel · 40 MFCC + Δ + ΔΔ" as FEAT #EBEBEB
+
+  rectangle "**Step 3 — Five-Model Inference**\n\
+Supervised : tiny-AST · CNN\n\
+Metric : Prototypical Network\n\
+Unsupervised : Conv-AE · OC-SVM\n\
+Output: class label · confidence score" as INFER #B4B2A9
+
+  rectangle "**Step 4 — GCC-PHAT DOA**\n\
+6 microphone pairs · TDOA\n\
+Bearing estimate in degrees\n\
+Target: MAE < 30° at 5 m" as GCC #EBEBEB
+
+  rectangle "**Step 5 — Grad-CAM XAI**\n\
+tf-explain · pytorch-grad-cam\n\
+Mel-spectrogram heatmap\n\
+Ranger trust layer" as GCAM #EBEBEB
+
+  rectangle "**Local Event Log**\n\
+SQLite · built-in Python\n\
+Timestamp · class · confidence\n\
+Bearing · audio path" as DB #EBEBEB
+
+}
+
+' ══════════════════════════════════════════
+' LAYER 3 — COMMUNICATION
+' ══════════════════════════════════════════
+rectangle "Layer 3 — Communication\n⚠  No internet — fully offline" as L3 #D3D1C7 {
+
+  rectangle "**SIM800L GSM Module**\n\
+Quad-band 850/900/1800/1900 MHz\n\
+UART serial · AT commands · pyserial\n\
+MTN / Airtel Rwanda SIM" as GSM #EBEBEB
+
+  rectangle "**SMS Alert Payload**\n\
+Delivered within 30 seconds\n\
+ALERTRECK | <class> | Conf: <x>%\n\
+Bearing: <y>° <direction> | <HH:MM>" as SMS #EBEBEB
+
+  rectangle "**Field Ranger**\n\
+Any GSM-capable handset\n\
+Labelled bearing-tagged alert\n\
+No data plan required" as PHONE #EBEBEB
+
+}
+
+' ══════════════════════════════════════════
+' LAYER 4 — INTERFACE
+' ══════════════════════════════════════════
+rectangle "Layer 4 — Interface" as L4 #D3D1C7 {
+
+  rectangle "**Flask LAN Dashboard**\n\
+Flask 3.x · port 5000\n\
+Class · confidence · bearing · Grad-CAM\n\
+Alert history · audio playback" as FLASK #EBEBEB
+
+}
+
+' ══════════════════════════════════════════
+' DATA FLOW ARROWS
+' ══════════════════════════════════════════
+MIC   -down-> VAD   : "4-ch audio · 44.1 kHz"
+VAD   -right-> FEAT  : "segmented events"
+FEAT  -right-> INFER : "log-mel · MFCC"
+FEAT  -down->  GCC   : "4-ch buffer"
+INFER -down->  GCAM  : "class gradients"
+INFER -down->  DB    : "log event"
+GCC   -down->  DB    : "log bearing"
+INFER -right-> GSM   : "class · confidence"
+GCC   -right-> GSM   : "bearing"
+GSM   -right-> SMS   : "AT+CMGS"
+SMS   -right-> PHONE : "GSM network"
+DB    -down->  FLASK : "event history"
+GCAM  -down->  FLASK : "heatmap overlay"
+
+' ══════════════════════════════════════════
+' NOTES
+' ══════════════════════════════════════════
+note bottom of INFER
+  Five models on identical dataset and hardware.
+  Winner selected by comparative evaluation.
+end note
+
+note bottom of GSM
+  SMS is the only outbound communication.
+  No Wi-Fi or Bluetooth broadcast.
+end note
+
+@enduml

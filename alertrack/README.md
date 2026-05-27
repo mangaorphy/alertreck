@@ -25,22 +25,19 @@ ALERTRACK is a production-ready edge ML system designed to run 24/7 on Raspberry
 | **THREAT_CONTEXT** | Medium Priority | ≥ 75% | Dog Bark |
 | **BACKGROUND** | No Alert | N/A | Animal Sounds, Wind/Rain, Ambient Noise |
 
-## 🛠️ Hardware Requirements
+## 🛠️ Hardware
 
-### Minimum (MVP)
-- **Raspberry Pi 4** (4GB RAM recommended, 2GB minimum)
-- **USB Microphone** (any USB audio device)
-- **GPS Module** (optional but recommended)
-  - UART: u-blox NEO-6M/7M/8M
-  - USB: GlobalSat BU-353S4, VK-162
-- **MicroSD Card** (32GB+ for evidence storage)
-- **Power Supply** (5V/3A USB-C for Pi 4)
+### Prototype BOM (≤ USD 80)
+- **Raspberry Pi 4 Model B** — 2 GB RAM, quad-core ARM Cortex-A72 @ 1.8 GHz; edge AI inference + alert dispatch
+- **USB microphone** — plug-and-play USB audio, 100 Hz–16 kHz; continuous outdoor audio capture at 44.1 kHz
+- **SIM808 GSM/GPRS/GPS module** — UART serial, built-in GPS receiver; SMS alerts (MTN/Airtel Rwanda) + device GPS coordinates; no data plan required
+- **32 GB Class 10 MicroSD card** — OS, model weights, SQLite event database, evidence audio
+- **Rwanda SIM card** (MTN or Airtel) — prepaid, GSM only; inserted into SIM808
 
 ### Optional Upgrades
-- **Camera Module** (for visual verification - stub implemented)
-- **LoRaWAN Module** (for long-range communication)
-- **GSM/LTE Module** (SIM800L, SIM7000 for cellular alerts)
-- **Solar Panel + Battery** (for remote deployment)
+- **Solar panel + LiPo battery** (for remote off-grid deployment)
+- **Weatherproof enclosure** (IP65+, outdoor mounting)
+- **Camera module** (visual verification — stub implemented)
 
 ## 📁 Project Structure
 

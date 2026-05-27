@@ -1,248 +1,176 @@
 """
-Threat Decision Logic Module
-=============================
-Applies thresholds and cooldown logic to determine if a threat should trigger an alert.
-Prevents alert spam and manages threat state.
+Threat Decision Logic
+=====================
+Evaluates per-class confidence against per-class thresholds.
+Every fine-grained threat class is detected independently —
+no class collapsing, no coarse grouping.
+
+Alert hierarchy:
+  background_animals   (0) — silent
+  background_wind_rain (1) — silent
+  threat_chainsaw      (2) — HIGH
+  threat_dog           (3) — MEDIUM
+  threat_gunshot       (4) — HIGH
+  threat_human         (5) — HIGH
+  threat_vehicle       (6) — HIGH
 """
 
 import time
 from typing import Optional, Dict, Tuple
 from collections import defaultdict
 
+import numpy as np
+
 from ..config import (
-    THREAT_THRESHOLD, THREAT_CONTEXT_THRESHOLD,
-    BACKGROUND_THRESHOLD, COOLDOWN_SECONDS,
-    THREAT_IDX, THREAT_CONTEXT_IDX, BACKGROUND_IDX,
-    CLASS_NAMES, DEBUG_MODE
+    CLASS_NAMES, BACKGROUND_CLASSES, THREAT_CONFIG, DEBUG_MODE
 )
 
 
 class ThreatDecisionEngine:
     """
-    Determines if model predictions should trigger alerts.
-    Implements thresholds and cooldown logic.
+    Per-class threshold and independent cooldown for all 7 fine-grained classes.
+    Background classes never trigger alerts.
     """
-    
+
     def __init__(self):
-        """Initialize threat decision engine."""
-        self.threat_threshold = THREAT_THRESHOLD
-        self.threat_context_threshold = THREAT_CONTEXT_THRESHOLD
-        self.background_threshold = BACKGROUND_THRESHOLD
-        self.cooldown_seconds = COOLDOWN_SECONDS
-        
-        # Track last alert time for each threat type
-        self.last_alert_times: Dict[str, float] = defaultdict(lambda: 0.0)
-        
+        self.last_alert_times: Dict[str, float] = defaultdict(float)
+
         # Statistics
-        self.total_predictions = 0
+        self.total_predictions      = 0
         self.total_threats_detected = 0
-        self.total_threats_suppressed = 0  # Due to cooldown
-        self.threat_counts = defaultdict(int)
-        
-        print(f"ThreatDecisionEngine initialized:")
-        print(f"  THREAT threshold: {self.threat_threshold}")
-        print(f"  THREAT_CONTEXT threshold: {self.threat_context_threshold}")
-        print(f"  Cooldown: {self.cooldown_seconds}s")
-    
+        self.total_suppressed       = 0
+        self.threat_counts          = defaultdict(int)
+
+        print("ThreatDecisionEngine initialised (fine-grained 7-class):")
+        for name, (thresh, level, cooldown) in THREAT_CONFIG.items():
+            print(f"  {name:<26}  thresh={thresh}  level={level}  cooldown={cooldown}s")
+
+    # ── Public API ────────────────────────────────────────────────────────────
+
     def evaluate(
         self,
         class_idx: int,
         confidence: float,
-        probabilities: list
+        probabilities: np.ndarray,
     ) -> Tuple[bool, Optional[Dict]]:
         """
-        Evaluate if prediction should trigger an alert.
-        
-        Args:
-            class_idx: Predicted class index
-            confidence: Confidence score
-            probabilities: All class probabilities
-            
+        Decide whether to fire an alert for the top predicted class.
+
         Returns:
-            Tuple of (should_alert, threat_info)
-            threat_info is None if no alert should be triggered
+            (should_alert, threat_info | None)
         """
         self.total_predictions += 1
-        
         class_name = CLASS_NAMES[class_idx]
-        current_time = time.time()
-        
-        # Determine if this is a threat based on class and confidence
-        is_threat = False
-        threat_level = "NONE"
-        
-        if class_idx == THREAT_IDX and confidence >= self.threat_threshold:
-            is_threat = True
-            threat_level = "HIGH"
-        elif class_idx == THREAT_CONTEXT_IDX and confidence >= self.threat_context_threshold:
-            is_threat = True
-            threat_level = "MEDIUM"
-        elif class_idx == BACKGROUND_IDX:
-            # Background - no threat
-            is_threat = False
-        else:
-            # Below threshold - uncertain
-            if DEBUG_MODE:
-                print(f"Below threshold: {class_name} confidence={confidence:.3f}")
-            is_threat = False
-        
-        if not is_threat:
+
+        # ── Background — always silent ────────────────────────────────────────
+        if class_name in BACKGROUND_CLASSES:
             return False, None
-        
-        # Threat detected! Check cooldown
+
+        # ── Not a configured threat class — ignore ────────────────────────────
+        if class_name not in THREAT_CONFIG:
+            return False, None
+
+        threshold, level, cooldown = THREAT_CONFIG[class_name]
+
+        # ── Below threshold — uncertain ───────────────────────────────────────
+        if confidence < threshold:
+            if DEBUG_MODE:
+                print(f"Below threshold: {class_name}  conf={confidence:.3f}  "
+                      f"(need {threshold})")
+            return False, None
+
+        # ── Threat above threshold — check cooldown ───────────────────────────
         self.total_threats_detected += 1
         self.threat_counts[class_name] += 1
-        
-        last_alert_time = self.last_alert_times[class_name]
-        time_since_last = current_time - last_alert_time
-        
-        if time_since_last < self.cooldown_seconds:
-            # Still in cooldown period
-            self.total_threats_suppressed += 1
-            
+
+        now = time.time()
+        elapsed = now - self.last_alert_times[class_name]
+
+        if elapsed < cooldown:
+            self.total_suppressed += 1
             if DEBUG_MODE:
-                remaining = self.cooldown_seconds - time_since_last
-                print(f"🔕 Threat suppressed (cooldown): {class_name}, "
-                      f"remaining={remaining:.1f}s")
-            
+                print(f"Suppressed (cooldown): {class_name}  "
+                      f"remaining={cooldown - elapsed:.0f}s")
             return False, None
-        
-        # Not in cooldown - trigger alert!
-        self.last_alert_times[class_name] = current_time
-        
+
+        # ── Fire! ─────────────────────────────────────────────────────────────
+        self.last_alert_times[class_name] = now
+
         threat_info = {
-            'threat_type': class_name,
-            'threat_level': threat_level,
-            'confidence': float(confidence),
-            'class_probabilities': {
+            "threat_type":        class_name,
+            "threat_level":       level,
+            "confidence":         float(confidence),
+            "class_probabilities": {
                 CLASS_NAMES[i]: float(probabilities[i])
                 for i in range(len(probabilities))
             },
-            'timestamp': current_time
+            "timestamp": now,
         }
-        
+
         if DEBUG_MODE:
-            print(f"🚨 THREAT ALERT: {class_name} ({threat_level}) "
-                  f"confidence={confidence:.3f}")
-        
+            print(f"ALERT: {class_name}  ({level})  conf={confidence:.3f}")
+
         return True, threat_info
-    
+
     def reset_cooldown(self, class_name: Optional[str] = None):
-        """
-        Reset cooldown for specific class or all classes.
-        
-        Args:
-            class_name: Class to reset (None = reset all)
-        """
         if class_name:
             self.last_alert_times[class_name] = 0.0
-            print(f"Cooldown reset for: {class_name}")
         else:
             self.last_alert_times.clear()
-            print("All cooldowns reset")
-    
+
     def get_cooldown_status(self) -> Dict[str, float]:
-        """
-        Get remaining cooldown time for each threat type.
-        
-        Returns:
-            Dictionary of {class_name: remaining_seconds}
-        """
-        current_time = time.time()
-        status = {}
-        
-        for class_name, last_time in self.last_alert_times.items():
-            elapsed = current_time - last_time
-            remaining = max(0, self.cooldown_seconds - elapsed)
-            status[class_name] = remaining
-        
-        return status
-    
-    def get_stats(self) -> Dict:
-        """Get decision engine statistics."""
+        now = time.time()
         return {
-            'total_predictions': self.total_predictions,
-            'total_threats_detected': self.total_threats_detected,
-            'total_threats_suppressed': self.total_threats_suppressed,
-            'threat_counts': dict(self.threat_counts),
-            'cooldown_status': self.get_cooldown_status()
+            name: max(0.0, THREAT_CONFIG[name][2] - (now - last))
+            for name, last in self.last_alert_times.items()
+            if name in THREAT_CONFIG
         }
-    
+
+    def get_stats(self) -> Dict:
+        return {
+            "total_predictions":      self.total_predictions,
+            "total_threats_detected": self.total_threats_detected,
+            "total_suppressed":       self.total_suppressed,
+            "threat_counts":          dict(self.threat_counts),
+            "cooldown_status":        self.get_cooldown_status(),
+        }
+
     def is_threat_class(self, class_idx: int) -> bool:
-        """Check if class index represents a threat."""
-        return class_idx in [THREAT_IDX, THREAT_CONTEXT_IDX]
-    
-    def get_threat_level_description(self, class_idx: int) -> str:
-        """Get human-readable threat level."""
-        if class_idx == THREAT_IDX:
-            return "HIGH - Immediate threat (gunshot, chainsaw, vehicle)"
-        elif class_idx == THREAT_CONTEXT_IDX:
-            return "MEDIUM - Potential threat indicator (dog bark)"
-        else:
-            return "NONE - Background/ambient sound"
+        return CLASS_NAMES[class_idx] in THREAT_CONFIG
+
+    def get_threat_level(self, class_idx: int) -> str:
+        name = CLASS_NAMES[class_idx]
+        cfg  = THREAT_CONFIG.get(name)
+        return cfg[1] if cfg else "NONE"
 
 
 def test_decision_engine():
-    """Test the threat decision engine."""
-    print("\n🧠 Testing ThreatDecisionEngine...")
+    print("\nTesting ThreatDecisionEngine...")
     print("=" * 60)
-    
+
     engine = ThreatDecisionEngine()
-    
-    # Test 1: High confidence THREAT
-    print("\n[Test 1] High confidence THREAT")
-    probabilities = [0.05, 0.05, 0.90]  # BACKGROUND, THREAT_CONTEXT, THREAT
-    should_alert, info = engine.evaluate(THREAT_IDX, 0.90, probabilities)
-    print(f"  Should alert: {should_alert}")
-    if info:
-        print(f"  Info: {info}")
-    
-    # Test 2: Same threat immediately (should be suppressed)
-    print("\n[Test 2] Same THREAT immediately (cooldown)")
-    should_alert, info = engine.evaluate(THREAT_IDX, 0.92, probabilities)
-    print(f"  Should alert: {should_alert} (expected: False)")
-    
-    # Test 3: Different threat type
-    print("\n[Test 3] Different threat type (THREAT_CONTEXT)")
-    probabilities = [0.1, 0.80, 0.1]
-    should_alert, info = engine.evaluate(THREAT_CONTEXT_IDX, 0.80, probabilities)
-    print(f"  Should alert: {should_alert}")
-    if info:
-        print(f"  Info: {info}")
-    
-    # Test 4: Below threshold
-    print("\n[Test 4] THREAT but below threshold")
-    probabilities = [0.3, 0.2, 0.50]
-    should_alert, info = engine.evaluate(THREAT_IDX, 0.50, probabilities)
-    print(f"  Should alert: {should_alert} (expected: False)")
-    
-    # Test 5: Background class
-    print("\n[Test 5] BACKGROUND class")
-    probabilities = [0.90, 0.05, 0.05]
-    should_alert, info = engine.evaluate(BACKGROUND_IDX, 0.90, probabilities)
-    print(f"  Should alert: {should_alert} (expected: False)")
-    
-    # Show stats
-    print("\n📊 Decision Engine Statistics:")
-    stats = engine.get_stats()
-    for key, value in stats.items():
-        print(f"  {key}: {value}")
-    
-    # Show cooldown status
-    print("\n⏱️  Cooldown Status:")
-    cooldown = engine.get_cooldown_status()
-    for class_name, remaining in cooldown.items():
-        print(f"  {class_name}: {remaining:.1f}s remaining")
-    
-    # Reset cooldown and test again
-    print("\n[Test 6] After cooldown reset")
-    engine.reset_cooldown()
-    probabilities = [0.05, 0.05, 0.90]
-    should_alert, info = engine.evaluate(THREAT_IDX, 0.90, probabilities)
-    print(f"  Should alert: {should_alert} (expected: True)")
-    
-    print("\n" + "=" * 60)
-    print("✅ Test complete!")
+    dummy_probs = np.zeros(7, dtype=np.float32)
+
+    tests = [
+        (4, 0.92, "gunshot HIGH — should alert"),
+        (4, 0.92, "gunshot again immediately — suppressed"),
+        (2, 0.88, "chainsaw — should alert"),
+        (3, 0.82, "dog MEDIUM — should alert"),
+        (0, 0.99, "bg_animals — silent"),
+        (1, 0.99, "bg_wind — silent"),
+        (5, 0.50, "human below threshold — no alert"),
+        (5, 0.90, "human above threshold — should alert"),
+    ]
+
+    for idx, conf, label in tests:
+        dummy_probs[:] = 0
+        dummy_probs[idx] = conf
+        alert, info = engine.evaluate(idx, conf, dummy_probs)
+        status = "ALERT" if alert else "no alert"
+        print(f"  [{CLASS_NAMES[idx]:<26}  conf={conf}]  → {status}  ({label})")
+
+    print("\nStats:", engine.get_stats())
+    print("=" * 60)
 
 
 if __name__ == "__main__":
