@@ -65,7 +65,9 @@ Thumbs.db
 *.pb
 *.pt
 *.onnx
+*.zip
 saved_model/
+models/
 models/custom_cnn/best_model.pt
 models/custom_cnn/alertreck_cnn.onnx
 models/tiny_ast/

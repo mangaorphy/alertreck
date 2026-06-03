@@ -3,13 +3,14 @@
 **Student:** Orpheus Mhizha Manga · **Program:** ALU BSc SE (Machine Learning), 2026 Capstone
 **Supervisor:** Hubert Apana · **Contact:** o.manga@alustudent.com
 **Project:** Offline edge-AI acoustic poaching-threat detection for remote African conservation parks
-**Full title:** *Benchmarking Metric Learning, Supervised Classification, and Anomaly Detection on Identical Field Hardware*
+**Full title:** *Offline Edge AI for Anti-Poaching Acoustic Surveillance: Benchmarking Pretrained Embeddings, Metric Learning, Supervised Classification, and Anomaly Detection on Identical Field Hardware*
 
 > **Research questions (from proposal §1.4):**
-> - RQ1: Which learning paradigm (metric / supervised / unsupervised) achieves highest AUC-ROC, F1, and lowest FPR on a 7-class African savannah acoustic dataset on identical edge hardware?
-> - RQ2: How does per-class detection performance differ at SNR 5 / 10 / 20 dB?
-> - RQ3: Can the SIM808 GPS module provide accurate device coordinates for ranger dispatch within 30 s end-to-end latency on Pi 4 hardware?
-> - RQ4: Do Grad-CAM heatmaps highlight acoustically expected time-frequency regions, supporting ranger trust?
+> - RQ1: Which learning paradigm — supervised classification (CNN), metric learning (ProtoNet), frozen out-of-species transfer (W2V2-L2), or unsupervised anomaly detection (Conv-AE / OC-SVM) — achieves highest AUC-ROC, per-class F1, and lowest FPR on a 7-class African savannah acoustic dataset on identical edge hardware?
+> - RQ2: How does per-class detection performance differ across the five models at SNR 5 / 10 / 20 dB, and which sound class poses the greatest detection challenge under field-representative interference?
+> - RQ3: Can the SIM808 GSM/GPS module acquire a GPS fix and append device coordinates to a labelled SMS alert within the 30 s end-to-end latency budget on Pi 4 hardware, and what is the typical fix-acquisition time outdoors?
+> - RQ4: Do Grad-CAM heatmaps on the winning model's mel-spectrogram inputs highlight acoustically expected time-frequency regions, supporting ranger trust?
+> - RQ5: Does the out-of-species embedding advantage (Geldenhuys & Niesler, 2026) — a frozen, truncated wav2vec 2.0 layer-2 embedding approaching supervised performance for elephant calls — extend to non-biological threats (gunshots, chainsaws, vehicles) in a multi-class African savannah dataset, and does it retain that advantage on edge hardware after INT8 quantisation?
 
 ---
 
@@ -38,18 +39,21 @@ These are fixed by the approved proposal (May 2026). Deviations require supervis
 | Sample rate | 44.1 kHz mono | Captures full chainsaw / vehicle harmonic content up to Nyquist 22.05 kHz; matches USB microphone native rate |
 | Clip length | 3 s, 50 % overlap | Ensures full gunshot transient captured regardless of onset position |
 | Amplitude | RMS-normalised to −23 dBFS (EBU R128) | Removes gain variation across dataset sources |
-| Mel features | 128-bin log-mel, 25 ms window, 10 ms hop, Hann | Input for CNN, tiny-AST, ProtoNet, Conv-AE |
+| Mel features | 128-bin log-mel, 25 ms window, 10 ms hop, Hann | Input for CNN, ProtoNet, Conv-AE |
+| wav2vec input | 3 s mono waveform resampled to 16 kHz | Native input for the frozen wav2vec 2.0 layer-2 embedding (W2V2-L2 arm); matches the model's pretraining sample rate |
 | MFCC features | 40-coeff + Δ + ΔΔ → 120-dim vector per frame | Input for OC-SVM; RBF kernel tractable at this dimensionality |
 
-### 1.3 Five-model comparative architecture (three paradigms)
+### 1.3 Five-model comparative architecture (four paradigms)
 
 | Model | Paradigm | Input | Loss | Key detail |
 |---|---|---|---|---|
-| **tiny-AST** | Supervised | 128-bin log-mel + SpecAugment | Focal loss γ=2 | Pre-trained AudioSet weights; fine-tuned 7-class head |
 | **CNN** | Supervised | 128-bin log-mel + SpecAugment | Focal loss γ=2 | 4 conv blocks + FC; ~2.1 M params; encoder reused by ProtoNet |
-| **ProtoNet (CNN enc)** | Metric learning | 128-bin log-mel + SpecAugment | Prototypical loss + SupCon (λ=0.1) | N=7, K=5 support, Q=15 query per episode; t-SNE visualisation |
+| **ProtoNet (CNN enc)** | Metric learning | 128-bin log-mel + SpecAugment | Prototypical loss + SupCon (λ=0.1) | N=7, K=5 support, Q=15 query per episode; SupCon pulls same-class embeddings across episodes; t-SNE visualisation |
+| **W2V2-L2 + linear head** | Frozen transfer (out-of-species) | 16 kHz raw waveform → frozen wav2vec 2.0 layer-2 embedding (768-dim mean-pooled) | Cross-entropy + focal weighting | wav2vec 2.0 base truncated at layer 2 (~10 % of params); encoder frozen, only a 768→7 linear head trained; no fine-tuning (Geldenhuys & Niesler, 2026) |
 | **Conv-AE** | Unsupervised anomaly | 128-bin log-mel + compound aug | MSE reconstruction | 3-layer encoder → 16×16×128 latent; symmetric decoder |
-| **OC-SVM** | Unsupervised anomaly | 120-dim MFCC+Δ+ΔΔ + compound aug | One-class hinge | RBF kernel; ν=0.1; grid search for γ |
+| **OC-SVM** | Unsupervised (classical baseline) | 120-dim MFCC+Δ+ΔΔ + compound aug | One-class hinge | RBF kernel; ν=0.1; grid search for γ; provides the interpretability / compute floor |
+
+> **Note:** tiny-AST (a supervised, fine-tuned audio transformer) was dropped on 2026-06-01 and replaced by **W2V2-L2**. Fine-tuning a transformer on a small corpus overfits under domain shift; a frozen, truncated wav2vec 2.0 layer-2 embedding introduces a genuinely distinct fourth paradigm (frozen out-of-species transfer) rather than a second supervised architecture, and is the empirical vehicle for RQ5 (Geldenhuys & Niesler, 2026).
 
 ### 1.4 Dataset split
 
@@ -73,8 +77,8 @@ These are fixed by the approved proposal (May 2026). Deviations require supervis
 
 - Identical preprocessed dataset at 44.1 kHz with 3 s windows, 50 % overlap
 - Identical 60/20/20 stratified split, fixed seed 42
-- Identical evaluation hardware (Raspberry Pi 4 Model B, 4 GB RAM)
-- Identical nine evaluation techniques applied to all models
+- Identical evaluation hardware (Raspberry Pi 4 Model B, 2 GB RAM)
+- Identical nine evaluation techniques applied to all five models across all four paradigms
 - Identical SNR injection conditions (5, 10, and 20 dB) for anomaly injection tests
 - Experiment tracking: local **MLflow** (offline-first — consistent with no-cloud design constraint)
 
@@ -160,8 +164,9 @@ Applied to **all clips** in order. Steps 6a–6e apply to **training folds only*
 | 1 | **Resample** | Kaiser-best resampling → 44.1 kHz mono | Full chainsaw/vehicle harmonic content up to 22.05 kHz; matches USB microphone native rate |
 | 2 | **Normalise** | RMS amplitude → −23 dBFS (EBU R128) | Removes gain variation across sources; prevents loudness shortcuts |
 | 3 | **Segment** | Sliding window: 3 s, step 1.5 s (50 % overlap) | Ensures full gunshot transient captured regardless of onset position |
-| 4a | **Log-mel spectrogram** | STFT → 128-bin mel filterbank → log; 25 ms window, 10 ms hop, Hann | Input for CNN, tiny-AST, ProtoNet, Conv-AE |
-| 4b | **MFCC+Δ+ΔΔ** | DCT → delta → delta-delta; 40 coefficients → 120-dim vector per frame | Input for OC-SVM; RBF kernel tractable at this dimensionality |
+| 4a | **Log-mel spectrogram** | STFT → 128-bin mel filterbank → log; 25 ms window, 10 ms hop, Hann | Input for CNN, ProtoNet, Conv-AE |
+| 4b | **Raw waveform (16 kHz)** | 3 s mono waveform resampled 44.1 → 16 kHz | Native input for the frozen wav2vec 2.0 layer-2 encoder (W2V2-L2 arm); matches wav2vec 2.0 pretraining sample rate (Geldenhuys & Niesler, 2026) |
+| 4c | **MFCC+Δ+ΔΔ** | DCT → delta → delta-delta; 40 coefficients → 120-dim vector per frame | Input for OC-SVM; RBF kernel tractable at this dimensionality |
 | 5 | **USB mic DIR calibration** | Sweep-tone impulse response recorded via deployment USB microphone; convolved with all training clips | Closes device domain gap between downloaded training data and deployment microphone frequency response (Morocutti et al., 2023) |
 | 6a | **SpecAugment** | Time masking: 2 masks, max 40 frames; frequency masking: 2 masks, max 20 bins | Forces model to learn full spectral shape of threats, not just onset timing (Wang et al., 2021) |
 | 6b | **Compound augmentation** | Randomly sample 2–4 effects from pool below; physical plausibility filter applied | Simulates real compound field conditions per Mega-ASR (Xie et al., 2026) |
@@ -193,7 +198,7 @@ Following Mega-ASR's progressive difficulty strategy (Xie et al., 2026). Models 
 | **Phase B** | W5 | Medium compound: 2–3 effects at moderate severity (steps 6a–6d, severity k ≤ 0.5) | 10–15 dB | Introduces realistic field degradation; prevents overfitting to clean training distribution |
 | **Phase C** | W6 | Full compound pipeline: 2–4 effects at full severity including far-field and device distortion (steps 6a–6e) | 5–10 dB | Exposes models to hardest compound conditions; learnability filter (step 6e) applied to prevent collapse on unrecoverable samples |
 
-**Applies to:** CNN, tiny-AST, ProtoNet training pipelines (identical schedule).
+**Applies to:** CNN, W2V2-L2, ProtoNet training pipelines (identical schedule). For W2V2-L2 the wav2vec 2.0 layer-2 encoder is held **fixed in all phases** — only the lightweight linear head receives gradient updates across the curriculum (Geldenhuys & Niesler, 2026).
 
 **For Conv-AE and OC-SVM** (trained on background-class audio only):
 - Phase A: clean background clips only
@@ -274,7 +279,8 @@ Ten stages across eight proposal phases. Each stage maps to a proposal section a
    - Step 2: RMS normalise → −23 dBFS (EBU R128)
    - Step 3: Sliding window, 3 s, 1.5 s step → 132,300 samples per clip
    - Step 4a: 128-bin log-mel (STFT win=1102/25 ms, hop=441/10 ms, Hann, n_fft=2048) → (128, 300) shape
-   - Step 4b: MFCC+Δ+ΔΔ (40 coefficients → 120-dim per frame)
+   - Step 4b: 16 kHz raw-waveform branch for the W2V2-L2 frozen encoder — **new requirement from the updated proposal (2026-06-01); not yet emitted, pipeline extension + re-run pending**
+   - Step 4c: MFCC+Δ+ΔΔ (40 coefficients → 120-dim per frame)
    - Step 5: DIR calibration stub (active with `--dir-ir usb_mic_ir.wav`)
    - Steps 6a–6e: SpecAugment, compound aug pool, FilterAugment, mixup utility, learnability filter stub
    - Step 7: 60/20/20 stratified split, seed 42; test set locked
@@ -296,33 +302,26 @@ Ten stages across eight proposal phases. Each stage maps to a proposal section a
 | `mfcc/{same splits}` | — | same counts |
 
 **Artefact:** [scripts/audio_preprocessing.py](scripts/audio_preprocessing.py) · `data/processed/` shards · `manifest.json` · `splits.json`
-**Status:** ● complete (DIR calibration pending hardware fix — does not block training)
+**Status:** ◐ mel/mfcc shards complete; **16 kHz raw-waveform branch (step 4b) for W2V2-L2 still to be added and the pipeline re-run** (new requirement, updated proposal). DIR calibration also pending hardware fix — neither blocks CNN/ProtoNet training.
 
 ---
 
-### Stage 3 — Supervised + metric model training (tiny-AST · CNN · ProtoNet) ◐
+### Stage 3 — Supervised + metric model training (CNN · ProtoNet) ◐
 
-**Goal:** Train and checkpoint three models across two paradigms under the three-phase curriculum.
+**Goal:** Train and checkpoint the two CNN-encoder models (supervised + metric paradigms) under the three-phase curriculum.
 **Proposal ref:** §3.5.1 (Table 4), §3.3.1
 **Proposal weeks:** W3–W5
-**Notebooks:** `notebooks/03a-train-cnn.ipynb` · `notebooks/03b-train-tiny-ast.ipynb` · `notebooks/03c-train-protonet.ipynb`
+**Notebooks:** `notebooks/03a-train-cnn.ipynb` · `notebooks/03b-train-protonet.ipynb`
 **Experiment tracking:** local MLflow (offline)
 
 #### 3a. CNN (supervised, focal loss γ=2) ◐ notebook ready — awaiting Kaggle GPU run
 - Input: 128-bin log-mel (128 × 300) + SpecAugment
 - Architecture: 4 conv blocks + AdaptiveAvgPool + FC head; ~1.2 M parameters
-- Encoder exposes `encode()` method returning 256-dim embedding — reused by ProtoNet (Stage 3c)
+- Encoder exposes `encode()` method returning 256-dim embedding — reused by ProtoNet (Stage 3b)
 - Curriculum: Phase A (epochs 1–15, clean + aug_A) → Phase B (epochs 16–25, clean + aug_B) → Phase C (epochs 26+, clean + aug_C)
 - Notebook updated 2026-05-27: paths, shape (259→300), curriculum DataLoader switching, SpecAugment spec-correct, ONNX export cell added
 
-#### 3b. tiny-AST (supervised, focal loss γ=2)
-- Input: 128-bin log-mel + SpecAugment
-- Load pre-trained AudioSet weights from HuggingFace `transformers`
-- Fine-tune 7-class head; freeze lower layers initially, unfreeze progressively
-- Curriculum: same three-phase schedule as CNN
-- INT8 quantisation feasibility check: target < 10 MB, < 5 % accuracy drop
-
-#### 3c. ProtoNet (metric learning, prototypical loss + SupCon λ=0.1)
+#### 3b. ProtoNet (metric learning, prototypical loss + SupCon λ=0.1)
 - Input: 128-bin log-mel + SpecAugment
 - Episode config: N=7 classes, K=5 support shots, Q=15 query shots per episode
 - Encoder: reuse CNN encoder from Stage 3a (shared weights — train CNN first)
@@ -330,18 +329,26 @@ Ten stages across eight proposal phases. Each stage maps to a proposal section a
 - Curriculum: same three-phase schedule
 - Visualisation: t-SNE of 7-class embedding space after each curriculum phase
 
-**Outputs:** `models/tiny_ast/` · `models/cnn/` · `models/protonet/` — each with weights + MLflow metrics + training curves
+**Outputs:** `models/cnn/` · `models/protonet/` — each with weights + MLflow metrics + training curves
 
 ---
 
-### Stage 4 — Unsupervised anomaly detector training (Conv-AE · OC-SVM) ○
+### Stage 4 — Frozen-transfer + unsupervised detector training (W2V2-L2 · Conv-AE · OC-SVM) ○
 
-**Goal:** Train both unsupervised detectors on background-class audio only, under the curriculum.
+**Goal:** Train the frozen out-of-species transfer arm plus both unsupervised detectors, under the curriculum (Conv-AE / OC-SVM on background-class audio only).
 **Proposal ref:** §3.5.1 (Table 4), §3.3.1
 **Proposal weeks:** W5–W6
-**Notebooks:** `notebooks/04a_train_conv_ae.ipynb` · `notebooks/04b_train_oc_svm.ipynb`
+**Notebooks:** `notebooks/04a-train-w2v2-l2.ipynb` · `notebooks/04b-train-conv-ae.ipynb` · `notebooks/04c-train-oc-svm.ipynb`
 
-#### 4a. Conv-AE (MSE reconstruction)
+#### 4a. W2V2-L2 (frozen out-of-species transfer, cross-entropy + focal weighting) — **new arm, replaces tiny-AST**
+- Input: 3 s mono waveform resampled to 16 kHz → frozen wav2vec 2.0 base, **truncated at layer 2** → 768-dim mean-pooled embedding
+- Encoder **frozen in every phase** (~10 % of full wav2vec params retained); only a 768→7 linear head is trained — no fine-tuning of the embedding (Geldenhuys & Niesler, 2026)
+- Frameworks: HuggingFace `transformers` + `torchaudio` for embedding extraction; linear head in PyTorch (scikit-learn `LogisticRegression` fallback)
+- Curriculum: same three-phase schedule; only the linear head receives gradient updates
+- Directly answers RQ5 — does the out-of-species advantage extend to non-biological threats and survive INT8 quantisation?
+- Depends on Stage 2 emitting the 16 kHz raw-waveform shards (step 4b); independent of the CNN, so can train in parallel with Stage 3
+
+#### 4b. Conv-AE (MSE reconstruction)
 - Input: 128-bin log-mel + compound augmentation
 - Architecture: 3-layer encoder → 16×16×128 latent; symmetric decoder
 - Training data: `background_animals` + `background_wind_rain` only
@@ -351,13 +358,13 @@ Ten stages across eight proposal phases. Each stage maps to a proposal section a
   - Phase C (W6): full compound augmentation on background (learnability filter applied)
 - Anomaly threshold: 95th percentile reconstruction error on held-out background val set
 
-#### 4b. OC-SVM (one-class hinge)
+#### 4c. OC-SVM (one-class hinge, classical baseline)
 - Input: 120-dim MFCC+Δ+ΔΔ + compound augmentation
 - Kernel: RBF; ν=0.1 contamination; γ selected via grid search
 - Training data: background classes only, same curriculum phasing
 - Note: OC-SVM does not benefit from deep curriculum in the same way — apply augmented features from Phase C directly
 
-**Outputs:** `models/conv_ae/` · `models/oc_svm/` with weights, reconstruction thresholds, decision boundaries
+**Outputs:** `models/w2v2_l2/` · `models/conv_ae/` · `models/oc_svm/` with weights, embeddings/linear head, reconstruction thresholds, decision boundaries
 
 ---
 
@@ -370,7 +377,7 @@ Ten stages across eight proposal phases. Each stage maps to a proposal section a
 
 **Tasks:**
 1. Run all nine evaluation techniques (§4 above) on all five models using the locked test set
-2. Compile three-paradigm results table: metric learning vs supervised vs unsupervised
+2. Compile four-paradigm results table: supervised (CNN) vs metric (ProtoNet) vs frozen transfer (W2V2-L2) vs unsupervised anomaly (Conv-AE / OC-SVM)
 3. Run anomaly injection tests at SNR 5 / 10 / 20 dB for all models
 4. Run threshold ablation sweeps; identify optimal operating threshold per model
 5. Benchmark inference latency on Raspberry Pi 4 (not laptop) for all five models
@@ -378,7 +385,7 @@ Ten stages across eight proposal phases. Each stage maps to a proposal section a
 7. Select winning model: highest AUC-ROC + F1 + lowest FPR + meets latency / size constraints
 
 **Outputs:**
-- `reports/comparative_eval.md` — three-paradigm results table
+- `reports/comparative_eval.md` — four-paradigm results table
 - `reports/figures/` — AUC-ROC curves, confusion matrices, t-SNE embedding plots
 - `reports/winning_model.md` — selection rationale
 
@@ -492,31 +499,31 @@ Ten stages across eight proposal phases. Each stage maps to a proposal section a
 | Phase | W1 | W2 | W3 | W4 | W5 | W6 | W7 | W8 | W9 | W10 |
 |---|---|---|---|---|---|---|---|---|---|---|
 | **Phase 1:** Data & Preprocessing (Stages 1–2) | █ | █ | | | | | | | | |
-| **Phase 2:** Supervised & Metric Models (Stage 3) | | | █ | █ | █ | | | | | |
-| **Phase 3:** Unsupervised Detectors (Stage 4) | | | | | █ | █ | | | | |
+| **Phase 2:** Supervised & Metric Models — CNN, ProtoNet (Stage 3) | | | █ | █ | █ | | | | | |
+| **Phase 3:** Frozen Transfer & Unsupervised Detectors — W2V2-L2, Conv-AE, OC-SVM (Stage 4) | | | | | █ | █ | | | | |
 | **Phase 4:** Comparative Evaluation (Stage 5) | | | | | | | █ | | | |
 | **Phase 5:** Edge Deployment (Stage 6) | | | | | | | | █ | | |
 | **Phase 6:** Direction + GSM Integration (Stage 7) | | | | | | | | █ | █ | |
 | **Phase 7:** Grad-CAM, Dashboard & Evaluation (Stage 8) | | | | | | | | | █ | █ |
 | **Phase 8:** Writing & Submission (Stage 9) | | | | | | | | | | █ |
 
-> **Current date: 2026-05-27.** Stages 1 and 2 are complete. Stage 3a (CNN) notebook is ready and uploading to Kaggle for GPU training. All hardware is in hand and the Pi is accessible at `alertreck.local`.
+> **Current date: 2026-06-01.** Stage 1 is complete; Stage 2 needs the new 16 kHz waveform branch (step 4b) for W2V2-L2. Stage 3a (CNN) notebook is ready and uploading to Kaggle for GPU training. The model line-up was updated 2026-06-01 (tiny-AST → W2V2-L2). All hardware is in hand and the Pi is accessible at `alertreck.local`.
 
 ---
 
-## 7. Status snapshot (2026-05-27)
+## 7. Status snapshot (2026-06-01)
 
 | Stage | Name | Status | Next action |
 |---|---|---|---|
 | 0 | Design lock-in | ● done | — |
 | 1 | Data engineering | ● done | — |
-| 2 | Preprocessing pipeline | ● done | Re-run with `--dir-ir` once USB mic hum resolved |
+| 2 | Preprocessing pipeline | ◐ | Add 16 kHz raw-waveform branch (step 4b) for W2V2-L2 + re-run; re-run with `--dir-ir` once USB mic hum resolved |
 | 3a | CNN training | ◐ | Upload shards to Kaggle, run `03a-train-cnn.ipynb` on GPU |
-| 3b | tiny-AST training | ○ | After CNN confirms pipeline is sound |
-| 3c | ProtoNet training | ○ | After CNN encoder weights available (Stage 3a) |
-| 4a | Conv-AE training | ○ | Unlocks learnability filter (step 6e) in preprocessing |
-| 4b | OC-SVM training | ○ | After Conv-AE threshold established |
-| 5 | Comparative evaluation | ○ | All nine techniques on all five models |
+| 3b | ProtoNet training | ○ | After CNN encoder weights available (Stage 3a) |
+| 4a | W2V2-L2 frozen transfer | ○ | New arm (replaces tiny-AST); needs 16 kHz waveform shards — extract frozen layer-2 embeddings, train linear head |
+| 4b | Conv-AE training | ○ | Unlocks learnability filter (step 6e) in preprocessing |
+| 4c | OC-SVM training | ○ | After Conv-AE threshold established |
+| 5 | Comparative evaluation | ○ | All nine techniques on all five models across four paradigms |
 | 6 | Edge deployment | ◐ skeleton | Convert winning model to TFLite INT8; plug into `alertrack/` daemon |
 | 7 | SIM808 GPS + GSM | ◐ skeleton | Hardware in hand; wire NMEA reader + AT command SMS; add ranger numbers to `config.py` |
 | 8 | Grad-CAM + dashboard | ○ | After winning model selected in Stage 5 |
@@ -541,20 +548,24 @@ Legend: ○ not started · ◐ partial / skeleton exists · ● done
 | 2026-05-27 | Stage 2 complete — preprocessing pipeline runs end-to-end | All shards generated: 7,359 clean train windows + 44,154 curriculum aug windows; DIR calibration deferred pending USB mic hum fix |
 | 2026-05-27 | All hardware in hand and deployed | Pi at alertreck.local (192.168.1.88); USB mic, SIM808, 32 GB SD, Rwanda SIM all confirmed |
 | 2026-05-27 | CNN notebook updated for new data | Shape 259→300, curriculum DataLoader, SpecAugment corrected, ONNX export added; ready for Kaggle GPU run |
+| 2026-06-01 | **tiny-AST dropped; replaced by W2V2-L2** (frozen wav2vec 2.0 layer-2 + linear head) | Updated proposal §2.3.4, §3.5.1: fine-tuning a transformer on a small corpus overfits under domain shift. A frozen, truncated layer-2 embedding is a genuinely distinct 4th paradigm (frozen out-of-species transfer) and the empirical vehicle for the new RQ5 (Geldenhuys & Niesler, 2026). `notebooks/03b-train-tiny-ast.ipynb` and `models/tiny_ast/` are superseded |
+| 2026-06-01 | Study is now a **four-paradigm** comparison (was three) | Supervised (CNN) · metric (ProtoNet) · frozen transfer (W2V2-L2) · unsupervised anomaly (Conv-AE / OC-SVM); RQ5 added |
+| 2026-06-01 | Preprocessing gains a **16 kHz raw-waveform branch (step 4b)** | wav2vec 2.0 was pretrained at 16 kHz; W2V2-L2 needs native-rate waveform input. MFCC branch renumbered 4b → 4c; Stage 2 reopened to emit waveform shards |
 
 ---
 
 ## 9. Critical path and blockers
 
-**Current critical path:** Stage 3a (CNN, Kaggle GPU) → Stage 3c (ProtoNet, needs CNN encoder) → Stage 4a (Conv-AE) → Stage 4b (OC-SVM) → Stage 5 (comparative eval) → Stage 6 (deployment)
+**Current critical path:** Stage 3a (CNN, Kaggle GPU) → Stage 3b (ProtoNet, needs CNN encoder) → Stage 4b (Conv-AE) → Stage 4c (OC-SVM) → Stage 5 (comparative eval) → Stage 6 (deployment). Stage 4a (W2V2-L2) is independent of the CNN and can train in parallel once the 16 kHz waveform shards exist.
 
 **Resolved blockers:**
 - ~~`threat_chainsaw` gap~~ — 567 clips, target met
-- ~~Stage 2 preprocessing rewrite~~ — complete, all shards on disk
+- ~~Stage 2 preprocessing rewrite~~ — mel/mfcc shards on disk
 
 **Active dependencies:**
-- Stage 3c (ProtoNet) cannot start until Stage 3a (CNN) produces `best_model.pt` — encoder weights are shared
-- Stage 4a (Conv-AE) trains independently on background-class audio; unlocks learnability filter (step 6e) for a future preprocessing re-run
+- Stage 2 must emit the **16 kHz raw-waveform shards (step 4b)** before Stage 4a (W2V2-L2) can extract frozen layer-2 embeddings — new requirement from the updated proposal
+- Stage 3b (ProtoNet) cannot start until Stage 3a (CNN) produces `best_model.pt` — encoder weights are shared
+- Stage 4b (Conv-AE) trains independently on background-class audio; unlocks learnability filter (step 6e) for a future preprocessing re-run
 - DIR calibration (step 5) pending USB mic hum fix — resolve via powered USB hub or gain reduction in `alsamixer`; re-run preprocessing with `--dir-ir usb_mic_ir.wav` before final evaluation
 
 **Hardware:** All five components in hand. Pi at `alertreck.local` (192.168.1.88), SSH accessible. SIM808 wiring to Pi UART pending Stage 7. Ranger phone numbers not yet added to `alertrack/config.py` (`RANGER_PHONE_NUMBERS`).
