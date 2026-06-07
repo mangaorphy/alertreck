@@ -108,22 +108,14 @@ _noise_pool: list[np.ndarray] = []
 # ── audio I/O ──────────────────────────────────────────────────────────────────
 
 def load_mono(path: Path) -> np.ndarray | None:
-    """Load any audio format, resample to 16 kHz mono float32."""
+    """Load any audio format via ffmpeg, resample to 16 kHz mono float32."""
     try:
-        if path.suffix.lower() == ".mp3":
-            cmd = ["ffmpeg", "-i", str(path), "-f", "f32le",
-                   "-ar", str(SR), "-ac", "1", "pipe:1", "-loglevel", "quiet"]
-            result = subprocess.run(cmd, capture_output=True)
-            if not result.stdout:
-                return None
-            return np.frombuffer(result.stdout, dtype=np.float32).copy()
-        audio, sr = sf.read(str(path), dtype="float32", always_2d=False)
-        if audio.ndim == 2:
-            audio = audio.mean(axis=1)
-        if sr != SR:
-            audio = librosa.resample(audio, orig_sr=sr, target_sr=SR,
-                                     res_type="kaiser_best")
-        return audio.astype(np.float32)
+        cmd = ["ffmpeg", "-i", str(path), "-f", "f32le",
+               "-ar", str(SR), "-ac", "1", "pipe:1", "-loglevel", "quiet"]
+        result = subprocess.run(cmd, capture_output=True)
+        if not result.stdout:
+            return None
+        return np.frombuffer(result.stdout, dtype=np.float32).copy()
     except Exception:
         return None
 
