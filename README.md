@@ -1,89 +1,163 @@
-# AudioSet Dataset Organization
+# Alertreck
 
-This directory contains audio samples organized by threat level categories for classification tasks.
-
-## Dataset Structure
-
-```
-AUDIOSET METADATA/
-├── THREAT/                    # Direct threat sounds
-│   ├── gunshot/              (598 files)
-│   ├── chainsaw/             (628 files)
-│   └── human_voice/          (1,114 files)
-│
-├── THREAT_CONTEXT/            # Contextual threat indicators
-│   └── dog_bark/             (1,105 files)
-│
-├── BACKGROUND/                # Environmental/background sounds
-│   ├── animal_sound/
-│   │   ├── quadrupeds/       (585 files)
-│   │   ├── birds/            (519 files)
-│   │   └── insects/          (703 files)
-│   ├── wind_rain/            (1,123 files)
-│   └── ambient_noise/        (359 files)
-│
-└── scripts/                   # Download scripts
-    ├── download_animal_sounds.py
-    ├── download_chainsaws.py
-    ├── download_env_noise.py
-    ├── download_human_sounds.py
-    ├── download_rain.py
-    └── download_wind.py
-```
-
-## Class Labels
-
-| Class ID | Class Name      | Category        | File Count |
-|----------|----------------|-----------------|------------|
-| 0        | gunshot        | THREAT          | 598        |
-| 1        | chainsaw       | THREAT          | 628        |
-| 2        | vehicle_engine | THREAT          | -          |
-| 3        | human_voice    | THREAT          | 1,114      |
-| 4        | dog_bark       | THREAT_CONTEXT  | 1,105      |
-| 5        | animal_sound   | BACKGROUND      | 1,807      |
-| 6        | wind_rain      | BACKGROUND      | 1,123      |
-| 7        | ambient_noise  | BACKGROUND      | 359        |
-
-**Total Audio Files: 6,734**
-
-## Category Descriptions
-
-### THREAT
-Direct threat sounds that require immediate attention:
-- **gunshot**: Gunfire and gunshot sounds
-- **chainsaw**: Chainsaw operating sounds
-- **human_voice**: Various human vocalizations (speech, screaming, etc.)
-
-### THREAT_CONTEXT
-Sounds that may indicate a threatening situation:
-- **dog_bark**: Dog barking (can indicate intruders or danger)
-
-### BACKGROUND
-Environmental and ambient sounds:
-- **animal_sound**: Wildlife sounds (quadrupeds, birds, insects)
-- **wind_rain**: Weather-related sounds (wind and rain combined)
-- **ambient_noise**: General environmental noise
-
-## Audio Format
-
-- **Format**: WAV
-- **Duration**: ~10 seconds per clip
-- **Source**: AudioSet (Google) and S3 bucket (ecosight-training-data)
-
-## Data Sources
-
-- AudioSet metadata: `class_labels_indices.csv`, `unbalanced_train_segments.csv`
-- Downloaded using yt-dlp for YouTube sources
-- S3 bucket sync for pre-extracted audio (gunshot, dog_bark)
-
-## Scripts
-
-All download scripts are located in the `scripts/` folder and use:
-- Python 3.13
-- yt-dlp for YouTube audio extraction
-- ffmpeg for audio processing
-- AWS CLI for S3 downloads
+Offline edge-AI system for anti-poaching audio detection on a Raspberry Pi 4.
+Detects gunshots, chainsaws, human voices, and other threat sounds in real time,
+then sends GPS-tagged alerts via GSM when a threat is confirmed — no internet required.
 
 ---
 
-*Dataset compiled: December 2025*
+## Overview
+
+Alertreck is a capstone research project comparing five audio classification models
+across four machine learning paradigms for wildlife protection:
+
+| Paradigm | Model | Notebook |
+|---|---|---|
+| Supervised classification | Custom CNN | `03a-train-cnn` |
+| Few-shot learning | Prototypical Network | `03b-train-protonet` |
+| Transfer learning (frozen) | Wav2Vec2-L2 | `04a-train-w2v2-l2` |
+| Unsupervised anomaly detection | Convolutional Autoencoder | `04b-train-conv-ae` |
+| Classical anomaly detection | One-Class SVM | `04c-train-oc-svm` |
+
+---
+
+## Hardware
+
+| Component | Spec |
+|---|---|
+| Edge device | Raspberry Pi 4 (4 GB) |
+| Microphone | USB cardioid mic |
+| Alert module | SIM808 GSM/GPS hat |
+| Deployment | Offline-first; alert via SMS/GPRS |
+
+---
+
+## Dataset
+
+7 audio classes sampled at 44.1 kHz, clipped to 3-second windows:
+
+| Label | Class | Category |
+|---|---|---|
+| 0 | `background_animals` | Background |
+| 1 | `background_wind_rain` | Background |
+| 2 | `threat_chainsaw` | Threat |
+| 3 | `threat_dog` | Threat |
+| 4 | `threat_gunshot` | Threat |
+| 5 | `threat_human` | Threat |
+| 6 | `threat_vehicle` | Threat |
+
+Raw audio is in `dataset/`. Processed shards (mel spectrograms, MFCCs, W2V2 embeddings)
+are in `data/processed/` and mirrored as Kaggle datasets for GPU training.
+
+---
+
+## Project Structure
+
+```
+alertreck/
+├── dataset/                    # Raw audio files (7 class folders)
+├── data/
+│   └── processed/
+│       ├── mel/                # Log-mel spectrogram shards (128 × 301)
+│       ├── mfcc/               # MFCC+Δ+ΔΔ shards (120 × T)
+│       ├── w2v2_l2/            # Wav2Vec2 embeddings (768-dim, L2-normalised)
+│       ├── splits.json         # Stable 60/20/20 file-level split (seed 42)
+│       └── manifest.json       # Per-file metadata
+├── notebooks/
+│   ├── 02b-prepare-w2v2-embeddings.ipynb
+│   ├── 03a-train-cnn.ipynb
+│   ├── 03b-train-protonet.ipynb
+│   ├── 04a-train-w2v2-l2.ipynb
+│   ├── 04b-train-conv-ae.ipynb
+│   └── 04c-train-oc-svm.ipynb
+├── scripts/
+│   ├── audio_preprocessing.py      # Mel / MFCC shard generation + augmentation
+│   ├── prepare_w2v2_embeddings.py  # W2V2 embedding extraction
+│   ├── data_manifest.py
+│   ├── data_loader.py
+│   └── export_model.py
+├── models/                     # Saved checkpoints and ONNX exports
+├── alertrack/                  # Raspberry Pi deployment service
+├── docs/                       # Project documentation
+│   ├── ROADMAP.md
+│   ├── DESIGN.md
+│   ├── MODEL_DESIGN.md
+│   ├── AUDIO_PREPROCESSING.md
+│   ├── DEPLOYMENT.md
+│   └── PROPOSAL.md
+└── README.md
+```
+
+---
+
+## Training Pipeline
+
+### 1. Preprocessing (local)
+
+```bash
+# Generate clean splits + all curriculum augmentation phases
+python3 scripts/audio_preprocessing.py --aug-phase A B C
+```
+
+Outputs mel and MFCC shards to `data/processed/`. Upload to Kaggle as datasets
+`alertreck-mel2` (mel) and `alertreck-mfcc` (MFCC) before running training notebooks.
+
+### 2. W2V2 Embeddings (Kaggle)
+
+Run `02b-prepare-w2v2-embeddings.ipynb` on Kaggle (GPU, ~2 hrs).
+Upload the output as dataset `w2v2-embeddings`.
+
+### 3. Model Training (Kaggle GPU)
+
+Run notebooks `03a` → `03b` → `04a` → `04b` → `04c` in order.
+Each notebook saves `results.json` and an ONNX or joblib model to `/kaggle/working/`.
+
+---
+
+## Results
+
+| Model | Test Acc | Macro F1 | Macro AUC | Gunshot F1 |
+|---|---|---|---|---|
+| ProtoNet | **0.9311** | 0.9205 | **0.9938** | 0.9969 |
+| Wav2Vec2-L2 | 0.9297 | **0.9210** | 0.9911 | 0.9979 |
+| CNN | 0.9264 | 0.9166 | — | **0.9990** |
+| Conv-AE (binary) | 0.5147 | — | 0.6033 | (AUC 0.37) |
+| OC-SVM (binary) | — | — | — | — |
+
+The three discriminative models are statistically tied at the top. **ProtoNet** is the accuracy
+benchmark; the **CNN** is recommended for deployment (smallest, self-contained, real-time on Pi 4).
+Full breakdown and the deployment rationale: [docs/MODEL_COMPARISON.md](docs/MODEL_COMPARISON.md).
+
+---
+
+## Documentation
+
+Full design and implementation notes are in [`docs/`](docs/):
+
+- [ROADMAP.md](docs/ROADMAP.md) — project milestones and research questions
+- [DESIGN.md](docs/DESIGN.md) — system architecture
+- [MODEL_DESIGN.md](docs/MODEL_DESIGN.md) — model specifications
+- [MODEL_COMPARISON.md](docs/MODEL_COMPARISON.md) — comparative results and model selection
+- [AUDIO_PREPROCESSING.md](docs/AUDIO_PREPROCESSING.md) — feature extraction details
+- [DEPLOYMENT.md](docs/DEPLOYMENT.md) — Raspberry Pi deployment guide
+
+---
+
+## Requirements
+
+Training runs on Kaggle (Python 3.10, PyTorch 2.x, CUDA).  
+Edge inference runs on Raspberry Pi 4 with ONNX Runtime (CPU) or scikit-learn (OC-SVM).
+
+```
+torch torchvision torchaudio
+transformers
+scikit-learn
+librosa soundfile
+onnxruntime
+joblib
+tqdm matplotlib
+```
+
+---
+
+*Capstone project — African Leadership University, 2025–2026*
