@@ -87,13 +87,22 @@ WIN_LENGTH  = 1102   # 25 ms @ 44.1 kHz
 HOP_STFT    = 441    # 10 ms @ 44.1 kHz
 FMIN        = 0
 FMAX        = SAMPLE_RATE // 2   # 22 050 Hz
-# Resulting spectrogram shape: 1 + floor(132300 / 441) = 300 frames
-INPUT_SHAPE = (1, N_MELS, 300)   # (C, H, W) — channels-first, PyTorch convention
+# Resulting spectrogram shape: 1 + floor(132300 / 441) = 301 frames (librosa center=True)
+INPUT_SHAPE = (1, N_MELS, 301)   # (C, H, W) — channels-first, PyTorch convention
 
 # Silence gate — skip inference if raw RMS is below this level
 # Prevents amplified electronic noise from being classified as a threat.
 # Tune this up if the mic is noisy, down if real sounds are being skipped.
 SILENCE_THRESHOLD = 0.01    # raise if mic noise still triggers; lower if real sounds are skipped
+
+# ── Mains-hum high-pass (field-mic fix, NOT part of training) ────────────────
+# USB mics inject 50 Hz mains hum (60 Hz in the Americas) that the clean training
+# audio never had. Left in, it dominates the low band and the model reads the
+# rumble as `threat_vehicle`. A high-pass removes it, moving the served signal
+# CLOSER to the (hum-free) training distribution. Applied before EBU normalisation.
+HPF_ENABLED   = True
+HPF_CUTOFF_HZ = 90.0    # pass above this; 50 Hz hum is fully removed. Set 110 if 100 Hz harmonic persists.
+HPF_WIDTH_HZ  = 30.0    # raised-cosine transition width below the cutoff (reduces ringing)
 
 # ============================================================================
 # INFERENCE LOOP

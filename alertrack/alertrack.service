@@ -7,10 +7,11 @@ StartLimitIntervalSec=0
 Type=simple
 Restart=always
 RestartSec=10
-User=pi
-WorkingDirectory=/home/pi/alertrack
-Environment="PATH=/home/pi/alertrack/venv/bin"
-ExecStart=/home/pi/alertrack/venv/bin/python /home/pi/alertrack/main.py
+User=alertreck
+WorkingDirectory=/home/alertreck/alertreck
+Environment="PATH=/home/alertreck/alertreck/venv/bin"
+# Run as a module (-m) from the project root so package-relative imports resolve.
+ExecStart=/home/alertreck/alertreck/venv/bin/python -m alertrack.main
 
 # Logging
 StandardOutput=journal

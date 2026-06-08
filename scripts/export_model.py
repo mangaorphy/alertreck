@@ -37,7 +37,7 @@ class ConvBlock(nn.Module):
 
 
 class AudioCNN(nn.Module):
-    """Input: (B, 1, 128, 259)  →  Output: (B, 7)"""
+    """Input: (B, 1, 128, 301)  →  Output: (B, 7)"""
     def __init__(self, n_classes: int = 7):
         super().__init__()
         self.encoder = nn.Sequential(
@@ -74,7 +74,9 @@ def export(model_pt: Path, onnx_out: Path) -> None:
     print(f"Best epoch : {checkpoint.get('epoch', '?')}")
     print(f"Val acc    : {checkpoint.get('val_acc', '?'):.4f}")
 
-    dummy = torch.randn(1, 1, 128, 259)
+    # 301 frames = training shape (hop=441, center=True). AdaptiveAvgPool makes the
+    # exported graph width-agnostic, but trace at the true training width for clarity.
+    dummy = torch.randn(1, 1, 128, 301)
     onnx_out.parent.mkdir(parents=True, exist_ok=True)
 
     torch.onnx.export(
@@ -84,7 +86,10 @@ def export(model_pt: Path, onnx_out: Path) -> None:
         input_names=["mel_spec"],
         output_names=["logits"],
         opset_version=17,
-        dynamic_axes={"mel_spec": {0: "batch"}, "logits": {0: "batch"}},
+        dynamic_axes={
+            "mel_spec": {0: "batch", 3: "frames"},   # tolerate any clip length
+            "logits":   {0: "batch"},
+        },
     )
     print(f"ONNX model saved: {onnx_out}")
 

@@ -55,7 +55,7 @@ class ONNXModel:
         Run inference on a single mel spectrogram.
 
         Args:
-            input_data: shape (1, 128, 259) or (128, 259) — float32
+            input_data: shape (1, 128, 301) or (128, 301) — float32
 
         Returns:
             (predicted_class_idx, confidence, probabilities[7])
@@ -110,7 +110,7 @@ def test_model():
     print("=" * 60)
     try:
         model = ONNXModel()
-        test_input = np.random.randn(1, 128, 259).astype(np.float32)
+        test_input = np.random.randn(1, 128, 301).astype(np.float32)
         result = model.predict(test_input)
         if result:
             idx, conf, probs = result
