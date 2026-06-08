@@ -116,17 +116,19 @@ Each notebook saves `results.json` and an ONNX or joblib model to `/kaggle/worki
 
 ## Results
 
-| Model | Test Acc | Macro F1 | Macro AUC | Gunshot F1 |
+| Model | Test Acc | Macro F1 | Macro AUC | Gunshot |
 |---|---|---|---|---|
-| ProtoNet | **0.9311** | 0.9205 | **0.9938** | 0.9969 |
-| Wav2Vec2-L2 | 0.9297 | **0.9210** | 0.9911 | 0.9979 |
-| CNN | 0.9264 | 0.9166 | — | **0.9990** |
-| Conv-AE (binary) | 0.5147 | — | 0.6033 | (AUC 0.37) |
-| OC-SVM (binary) | — | — | — | — |
+| ProtoNet | **0.9311** | 0.9205 | **0.9938** | F1 0.9969 |
+| Wav2Vec2-L2 | 0.9297 | **0.9210** | 0.9911 | F1 0.9979 |
+| CNN | 0.9264 | 0.9166 | — | F1 **0.9990** |
+| OC-SVM (binary) | 0.5100 | — | 0.7790 | AUC 0.805 |
+| Conv-AE (binary) | 0.5147 | — | 0.6033 | AUC 0.372 |
 
 The three discriminative models are statistically tied at the top. **ProtoNet** is the accuracy
 benchmark; the **CNN** is recommended for deployment (smallest, self-contained, real-time on Pi 4).
-Full breakdown and the deployment rationale: [docs/MODEL_COMPARISON.md](docs/MODEL_COMPARISON.md).
+Among anomaly detectors, the classical **OC-SVM** (< 1 MB) clearly beats the deep Conv-AE and is the
+only viable confirmatory model. Full breakdown and deployment rationale:
+[docs/MODEL_COMPARISON.md](docs/MODEL_COMPARISON.md).
 
 ---
 
