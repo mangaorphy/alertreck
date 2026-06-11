@@ -19,10 +19,16 @@ from .config import (
     ENABLE_GPS,
     STATS_INTERVAL,
     CLASS_LABELS,
+    ONSET_ENABLED,
+    ONSET_POLL_INTERVAL,
+    ONSET_SETTLE_S,
+    ONSET_TRIGGER_DB,
+    ONSET_REFRACTORY_S,
     validate_config,
 )
 from .audio.recorder import AudioRecorder
 from .audio.preprocess import AudioPreprocessor
+from .audio.onset import OnsetDetector
 from .inference.model import ONNXModel
 from .inference.decision import ThreatDecisionEngine
 from .sensors.gps import GPSReader
@@ -53,6 +59,7 @@ class ALERTRACKSystem:
 
         self.recorder: Optional[AudioRecorder] = None
         self.preprocessor: Optional[AudioPreprocessor] = None
+        self.onset: Optional[OnsetDetector] = None
         self.model: Optional[ONNXModel] = None
         self.decision_engine: Optional[ThreatDecisionEngine] = None
         self.gps: Optional[GPSReader] = None
@@ -86,6 +93,10 @@ class ALERTRACKSystem:
 
             self.preprocessor = AudioPreprocessor()
             self.logger.info("Preprocessor ready")
+
+            if ONSET_ENABLED:
+                self.onset = OnsetDetector()
+                self.logger.info("Onset detector ready")
 
             self.decision_engine = ThreatDecisionEngine()
             self.logger.info("Decision engine ready")
@@ -148,13 +159,13 @@ class ALERTRACKSystem:
             )
 
             if should_alert:
-                self._handle_threat(threat_info, audio_buffer)
+                self._handle_threat(threat_info, audio_buffer, mel_spec)
 
         except Exception as e:
             self.logger.error(f"Audio processing error: {e}")
             self.logger.debug(traceback.format_exc())
 
-    def _handle_threat(self, threat_info: dict, audio_buffer):
+    def _handle_threat(self, threat_info: dict, audio_buffer, mel_spec=None):
         try:
             threat_type  = threat_info["threat_type"]
             confidence   = threat_info["confidence"]
@@ -170,6 +181,12 @@ class ALERTRACKSystem:
             from .utils import generate_alert_id
             alert_id = generate_alert_id()
 
+            # Resolve location once — used by both the event record and the alert
+            location = {}
+            if self.gps and self.gps.has_fix():
+                lat, lon = self.gps.get_coordinates()
+                location = {"latitude": lat, "longitude": lon}
+
             evidence_path = None
             try:
                 evidence_path = self.evidence_manager.save_audio_evidence(
@@ -181,12 +198,16 @@ class ALERTRACKSystem:
             except Exception as e:
                 self.logger.error(f"Evidence save failed: {e}")
 
-            try:
-                location = {}
-                if self.gps and self.gps.has_fix():
-                    lat, lon = self.gps.get_coordinates()
-                    location = {"latitude": lat, "longitude": lon}
+            # Save mel + metadata sidecars for the Grad-CAM dashboard
+            if mel_spec is not None:
+                try:
+                    self.evidence_manager.save_event_record(
+                        mel_spec, threat_info, location, evidence_path, alert_id
+                    )
+                except Exception as e:
+                    self.logger.error(f"Event record save failed: {e}")
 
+            try:
                 alert = self.notifier.create_alert(
                     threat_info=threat_info,
                     location=location,
@@ -238,18 +259,11 @@ class ALERTRACKSystem:
             self.logger.error(f"Stats log error: {e}")
 
     def run(self):
-        global shutdown_requested
-        self.logger.info(f"Inference loop started  (interval={INFERENCE_INTERVAL}s)")
-
         try:
-            while not shutdown_requested:
-                self._process_audio_chunk()
-
-                if time.time() - self.last_stats_time >= STATS_INTERVAL:
-                    self._log_statistics()
-
-                time.sleep(INFERENCE_INTERVAL)
-
+            if ONSET_ENABLED and self.onset is not None:
+                self._run_onset_loop()
+            else:
+                self._run_timer_loop()
         except KeyboardInterrupt:
             self.logger.info("Keyboard interrupt")
         except Exception as e:
@@ -257,6 +271,46 @@ class ALERTRACKSystem:
             self.logger.error(traceback.format_exc())
         finally:
             self.shutdown()
+
+    def _run_timer_loop(self):
+        """Legacy mode — classify on a fixed interval regardless of content."""
+        global shutdown_requested
+        self.logger.info(f"Inference loop started  (timer mode, interval={INFERENCE_INTERVAL}s)")
+
+        while not shutdown_requested:
+            self._process_audio_chunk()
+
+            if time.time() - self.last_stats_time >= STATS_INTERVAL:
+                self._log_statistics()
+
+            time.sleep(INFERENCE_INTERVAL)
+
+    def _run_onset_loop(self):
+        """Onset-triggered mode — classify only when an energy onset is detected."""
+        global shutdown_requested
+        self.logger.info(
+            f"Inference loop started  (onset mode, poll={ONSET_POLL_INTERVAL}s, "
+            f"trigger=+{ONSET_TRIGGER_DB:.0f}dB, refractory={ONSET_REFRACTORY_S:.1f}s)"
+        )
+
+        while not shutdown_requested:
+            if self.recorder.is_buffer_ready():
+                audio = self.recorder.get_audio_buffer()
+                if audio is not None:
+                    triggered, info = self.onset.check(audio)
+                    if triggered:
+                        self.logger.info(
+                            f"Onset detected (+{info['margin_db']:.0f}dB over floor) — "
+                            f"settling {ONSET_SETTLE_S:.1f}s, then classifying"
+                        )
+                        # Let the event move toward the centre of the rolling buffer
+                        time.sleep(ONSET_SETTLE_S)
+                        self._process_audio_chunk()
+
+            if time.time() - self.last_stats_time >= STATS_INTERVAL:
+                self._log_statistics()
+
+            time.sleep(ONSET_POLL_INTERVAL)
 
     def shutdown(self):
         self.logger.info("Shutting down ALERTRACK...")

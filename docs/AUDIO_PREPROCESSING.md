@@ -1,181 +1,172 @@
 # Audio Preprocessing Pipeline — Stage 2
 
-**Script:** [`scripts/audio_preprocessing.py`](scripts/audio_preprocessing.py)  
-**Output:** `data/processed/`  
-**Completed:** 2026-04-20
+**Script:** [`scripts/audio_preprocessing.py`](scripts/audio_preprocessing.py)
+**Output:** `data/processed/`
+**Reproducibility:** seed 42 · `script_sha256` recorded in `manifest.json`
+
+> 📦 **Raw audio (`dataset/`) and processed shards (`data/processed/`) are on Google Drive:**
+> [Alertreck Data, Dataset & Models](https://drive.google.com/drive/folders/1U9BwIUNQ8Snl5RxR8LHthWfdOc_EdcTM?usp=sharing).
+> Download and place them at the repo root to re-run or inspect the pipeline.
 
 ---
 
 ## Overview
 
-This pipeline takes raw audio files from `dataset/` and converts them into machine-learning-ready feature arrays. It is the bridge between raw audio collection (Stage 1) and model training (Stage 3).
+This pipeline converts raw audio in `dataset/` into machine-learning-ready feature shards. It is the
+bridge between raw audio collection (Stage 1) and model training (Stage 3+). The defining feature is a
+**three-phase augmentation curriculum (A → B → C)** of increasing difficulty, each written to its own
+output path so training can ramp difficulty across phases.
 
 ```
-dataset/
-  background_animals/    (2,140 files)
-  background_wind_rain/  (680 files)
-  threat_chainsaw/       (529 files)
-  threat_dog/            (1,040 files)
-  threat_gunshot/        (2,400 files)
-  threat_human/          (1,040 files)
-  threat_vehicle/        (1,040 files)
-          ↓
-  audio_preprocessing.py
-          ↓
-data/processed/
-  mel/  {train, val, test}/  shard_NNN.npz
-  mfcc/ {train, val, test}/  shard_NNN.npz
-  manifest.json
+dataset/  (8,907 files)
+        │
+        ▼  audio_preprocessing.py
+        │
+   ┌────┴───────────────────────────────────────────────┐
+   │ load_mono → EBU R128 normalise → 3 s windowing      │
+   │ → FILE-LEVEL 60/20/20 split (splits.json, seed 42)  │
+   └────┬───────────────────────────────────────────────┘
+        │
+   ┌────┴─────────────┬──────────────────────────────────┐
+   ▼                  ▼                                   ▼
+ clean              augmentation curriculum            val / test
+ (train/val/test)   (train only, phases A/B/C)         (clean only — never augmented)
+        │                  │
+        ▼                  ▼
+   extract mel + mfcc   per-phase aug → mel + mfcc
+        │                  │
+        ▼                  ▼
+   data/processed/mel/{train,val,test}      data/processed/mel/train_aug_{A,B,C}
+   data/processed/mfcc/{train,val,test}     data/processed/mfcc/train_aug_{A,B,C}
 ```
 
 ---
 
 ## Fixed Parameters
 
+These match `manifest.json` exactly, and the edge preprocessor in
+[`alertrack/audio/preprocess.py`](alertrack/audio/preprocess.py) reproduces them at inference.
+
 | Parameter | Value | Reason |
 |---|---|---|
 | Sample rate | 44,100 Hz | CD-quality; consistent across all sources |
-| Clip length | 3 seconds | Long enough to capture a gunshot echo or chainsaw burst |
-| Overlap | 50 % (hop = 1.5 s) | More training windows per file; detects events at any position |
-| Mel bins | 128 | Detailed frequency resolution for spectrograms |
-| MFCC coefficients | 40 | Compact timbre representation |
-| FFT window | 2,048 samples (~46 ms) | Good frequency resolution |
-| STFT hop | 512 samples (~11 ms) | Good time resolution |
-| Random seed | 42 | Fully reproducible splits and augmentation |
+| Clip length | 3.0 s (132,300 samples) | Captures a gunshot echo or chainsaw burst |
+| Window hop | 1.5 s (50 % overlap) | More windows per file; detects events at any position |
+| Mel bins | 128 | Frequency resolution for spectrograms |
+| MFCC coefficients | 40 (+Δ +ΔΔ → 120 rows) | Compact timbre + dynamics |
+| FFT size (`n_fft`) | 2,048 (~46 ms) | Frequency resolution |
+| STFT window (`win_length`) | 1,102 (25 ms @ 44.1 kHz), Hann | Matches training feature extraction |
+| STFT hop (`hop_stft`) | 441 (10 ms @ 44.1 kHz) | → **301 time frames** per 3 s clip |
+| Loudness norm | **EBU R128 → −23 dBFS**, clipped to [−1, 1] | Volume-invariant; a quiet and loud gunshot look the same |
+| Mel scaling | `power_to_db(S, ref=np.max)` | dB relative to clip max |
+| Random seed | 42 | Reproducible splits and augmentation |
+
+> **Frame count:** `1 + floor(132300 / 441) = 301` (librosa `center=True`). All mel/MFCC shards are
+> `(128, 301)` / `(120, 301)`. This 301 is the input width the trained models expect.
 
 ---
 
 ## Class Labels
 
-Each dataset folder maps to its own integer label — 7-class fine-grained classification:
+| Folder | Label | Kind | Files |
+|---|---|---|---|
+| `background_animals` | 0 | Background | 2,140 |
+| `background_wind_rain` | 1 | Background | 680 |
+| `threat_chainsaw` | 2 | Threat | 567 |
+| `threat_dog` | 3 | Threat context | 1,040 |
+| `threat_gunshot` | 4 | Threat | 2,400 |
+| `threat_human` | 5 | Threat | 1,040 |
+| `threat_vehicle` | 6 | Threat | 1,040 |
 
-| Folder | Label | Kind |
-|---|---|---|
-| `background_animals` | 0 | Background |
-| `background_wind_rain` | 1 | Background |
-| `threat_chainsaw` | 2 | Threat |
-| `threat_dog` | 3 | Threat context |
-| `threat_gunshot` | 4 | Threat |
-| `threat_human` | 5 | Threat |
-| `threat_vehicle` | 6 | Threat |
-
-> At inference time, labels 2–6 trigger an alert; labels 0–1 do not.
+> At inference, labels 2–6 trigger an alert; labels 0–1 do not.
 
 ---
 
 ## Pipeline Steps
 
 ### Step 1 — Load Audio (`load_mono`)
+- Decodes any format (MP3/WAV/FLAC/OGG) via an `ffmpeg` subprocess to 16/44.1 kHz mono float32 — this
+  avoids the `resampy`/`soundfile` failure modes that silently drop non-MP3 files.
+- Stereo → mono by channel averaging; resampled to 44,100 Hz.
 
-Every audio file is loaded and standardised:
-- Reads WAV/FLAC/OGG via `soundfile`
-- Reads MP3 via `ffmpeg` subprocess (soundfile reads MP3 as 0 samples on Python 3.13)
-- Stereo → mono by averaging left and right channels
-- Resamples to 44,100 Hz if the file uses a different sample rate
+### Step 2 — EBU R128 Loudness Normalisation (`ebu_r128_normalize`)
+- Scales each clip to **−23 dBFS** (target RMS ≈ 0.0708) and clips to [−1, 1].
+- Makes the model invariant to recording volume / mic distance.
 
-### Step 2 — RMS Normalisation (`rms_normalize`)
+### Step 3 — Windowing
+- Each file is sliced into 3 s windows with 50 % overlap (hop 1.5 s). Files < 3 s are zero-padded to one
+  window. A 10 s file → 6 windows.
 
-Each file's volume is normalised to a fixed RMS level (0.1) before any processing. This ensures the model does not learn from recording volume differences — a quiet gunshot and a loud one should look the same after normalisation.
+### Step 4 — File-Level 60/20/20 Split (`splits.json`)
+- The split is **stratified by class at the file level**, not the window level. All windows from one file
+  stay in the same split — this prevents leakage (a model seeing window 1 in train and window 2 in test).
+- Stable across runs (seed 42), persisted to `data/processed/splits.json`.
 
-### Step 3 — Windowing (`slice_windows`)
+### Step 4b — Feature Extraction (per window)
+| Feature | Shape | Contents | Used by |
+|---|---|---|---|
+| Log-mel spectrogram | **(128, 301)** | mel power → dB (`ref=np.max`) | CNN (03a), ProtoNet (03b), Conv-AE (04b) |
+| MFCC + Δ + ΔΔ | **(120, 301)** | 40 MFCC + 40 Δ + 40 ΔΔ | OC-SVM (04c) |
 
-Each file is sliced into 3-second windows with 50% overlap:
+> The W2V2-L2 model (04a) does **not** use these shards — it consumes raw audio through the
+> `wav2vec2-base` backbone (see [`notebooks/02b-prepare-w2v2-embeddings.ipynb`](notebooks/02b-prepare-w2v2-embeddings.ipynb)).
 
-```
-Example — 7 second file:
-  [  Window 1  ]              0.0s → 3.0s
-        [  Window 2  ]        1.5s → 4.5s
-              [  Window 3  ]  3.0s → 6.0s
-              (7s - 3s hop = partial, discarded)
-```
+### Steps 5–6 — Augmentation (train split only)
+Applied only when `--aug-phase` is passed. Val/test are **never** augmented.
 
-Files shorter than 3 seconds are zero-padded to exactly 3 seconds (1 window).  
-This multiplies the number of training samples — a 10 s file produces 6 windows.
-
-**Total windows collected from 8,863 files: 17,054**
-
-| Class | Files | Windows |
-|---|---|---|
-| `background_animals` | 2,140 | 5,770 |
-| `background_wind_rain` | 680 | 1,360 |
-| `threat_chainsaw` | 529 | 2,550 |
-| `threat_dog` | 1,040 | 1,080 |
-| `threat_gunshot` | 2,400 | 2,400 |
-| `threat_human` | 1,040 | 3,814 |
-| `threat_vehicle` | 1,040 | 1,080 |
-
-### Step 4 — Train / Val / Test Split
-
-Windows are split **60 / 20 / 20** stratified by class (each class keeps its proportion in every split) using seed 42:
-
-| Split | Windows |
+| Step | What |
 |---|---|
-| Train | 10,232 |
-| Val | 3,411 |
-| Test | 3,411 |
+| 5 — DIR calibration (optional) | Convolve with a USB-mic sweep-tone impulse response (`--dir-ir`) to match deployment mic colour |
+| 6a — SpecAugment (mel) | 2 time masks (≤40 frames) + 2 freq masks (≤20 bins) |
+| 6b — Compound effect pool | `noise │ rir │ lowpass │ mp3 │ gain │ clip` (rir ⊕ clip are mutually exclusive) |
+| 6c — FilterAugment | ±6 dB smooth random frequency curve over mel bins |
+| 6d — mixup | Applied in the DataLoader at train time, not written to disk |
 
-Stratification ensures no class is over- or under-represented in any split.
+---
 
-### Step 5 — Augmentation (train split only)
+## The Three-Phase Curriculum
 
-For every original training window, **6 augmented copies** are generated:
+This is the core of the pipeline. Each phase applies progressively harder augmentation and emits **more
+copies per clean window**, to its own output directory. Training ramps through them (Phase A → B → C).
 
-| Augmentation | What it does | Purpose |
-|---|---|---|
-| Time-shift ±200 ms | Rolls the waveform forward or backward | Model is not position-dependent |
-| Gain ±6 dB | Makes clip louder or quieter | Handles varying mic distances in the field |
-| Pitch shift ±2 semitones | Raises or lowers pitch | Same chainsaw sounds different at different RPMs |
-| Noise @ 5 dB SNR | Mixes with heavy wind/rain background | Hard field conditions |
-| Noise @ 10 dB SNR | Mixes with moderate background | Typical field conditions |
-| Noise @ 20 dB SNR | Mixes with light background | Good recording conditions |
+| Phase | Effects/clip | Severity | Noise SNR | Copies / window | Output path | Windows | Shards |
+|---|---|---|---|---|---|---|---|
+| **A** | 1–2 | 0.3 | ≥ 15 dB | ×1 | `…/train_aug_A/` | 10,223 | 11 |
+| **B** | 2–4 | 0.5 | 10–15 dB | ×2 | `…/train_aug_B/` | 20,446 | 21 |
+| **C** | 2–5 | 1.0 | 5–10 dB | ×3 | `…/train_aug_C/` | 30,669 | 31 |
 
-The noise source is real `background_wind_rain` clips (100 clips randomly sampled at startup).
-
-**After augmentation:**
-
-| Split | Original | After augmentation |
-|---|---|---|
-| Train | 10,232 | **71,624** (×7) |
-| Val | 3,411 | 3,411 (unchanged) |
-| Test | 3,411 | 3,411 (unchanged) |
-
-Val and test are never augmented to ensure honest evaluation.
-
-### Step 6 — Feature Extraction
-
-Two feature types are extracted from every window:
-
-#### Log-Mel Spectrogram
-A 2D representation of sound — like a photograph of the audio:
-- Shape: **(128, 259)** — 128 frequency bins × 259 time frames for a 3 s clip
-- Frequency axis uses the mel scale, which mimics human hearing (more detail at low frequencies)
-- Values are in decibels (log scale)
-- Used by: **CNN from scratch** and **tiny-AST**
+During training, each phase concatenates the **clean** train set with that phase's augmented set:
 
 ```
-Frequency (mel) ↑
-128 bins        |  [darker = louder]
-                |  ░░▓▓▓▓░░░░░▓▓▓▓▓░░░░
-                └─────────────────────→ Time (259 frames)
+Phase A loader = train (clean)  +  train_aug_A     ( 10,223 + 10,223 )
+Phase B loader = train (clean)  +  train_aug_B     ( 10,223 + 20,446 )
+Phase C loader = train (clean)  +  train_aug_C     ( 10,223 + 30,669 )
 ```
 
-#### MFCC + Δ + ΔΔ
-A compact description of how the spectral shape changes over time:
-- **MFCC (40 rows):** snapshot of timbre at each frame
-- **Δ (40 rows):** rate of change (first derivative)
-- **ΔΔ (40 rows):** acceleration of change (second derivative)
-- Shape: **(120, 259)**
-- Used by: **One-Class SVM** and **Convolutional Autoencoder**
+So the model starts on mild conditions (Phase A: high SNR, few effects) and finishes on the hardest
+(Phase C: 5–10 dB SNR, up to 5 stacked effects, 3× the data) — a difficulty curriculum.
 
-### Step 7 — Shard Writing
+---
 
-Features are saved in compressed `.npz` batches of 1,000 samples each (shards). Each shard contains:
+## Split & Window Counts (`manifest.json`)
+
+| Split | Clean windows | Shards |
+|---|---|---|
+| Train (clean) | 10,223 | 11 |
+| Train aug A | 10,223 | 11 |
+| Train aug B | 20,446 | 21 |
+| Train aug C | 30,669 | 31 |
+| Val | 3,392 | 4 |
+| Test | 3,439 | 4 |
+
+Total clean windows: **17,054** (10,223 train + 3,392 val + 3,439 test).
+Shards are written in compressed `.npz` batches of 1,000 samples.
 
 ```python
 shard_000.npz
-  X     → shape (1000, 128, 259)  # feature arrays
-  y     → shape (1000,)           # integer labels 0–6
-  meta  → shape (1000,)           # "class|source_file" strings
+  X     → (≤1000, 128, 301)   # mel  (or (≤1000, 120, 301) for mfcc)
+  y     → (≤1000,)            # integer labels 0–6
+  meta  → (≤1000,)            # per-window source metadata
 ```
 
 ---
@@ -185,24 +176,21 @@ shard_000.npz
 ```
 data/processed/
   mel/
-    train/   shard_000.npz … shard_071.npz   (72 shards, 71,624 samples, 7.1 GB)
-    val/     shard_000.npz … shard_003.npz   (4 shards,   3,411 samples)
-    test/    shard_000.npz … shard_003.npz   (4 shards,   3,411 samples)
+    train/         11 shards   (10,223 windows)
+    train_aug_A/   11 shards   (10,223)
+    train_aug_B/   21 shards   (20,446)
+    train_aug_C/   31 shards   (30,669)
+    val/            4 shards   ( 3,392)
+    test/           4 shards   ( 3,439)
   mfcc/
-    train/   shard_000.npz … shard_071.npz   (72 shards, 71,624 samples)
-    val/     shard_000.npz … shard_003.npz   (4 shards,   3,411 samples)
-    test/    shard_000.npz … shard_003.npz   (4 shards,   3,411 samples)
-  manifest.json                               (run parameters + SHA256)
-  manifest.csv                                (per-file metadata)
+    train/ train_aug_A/ train_aug_B/ train_aug_C/ val/ test/   (same shape, (120, 301))
+  splits.json        # stable file-level 60/20/20 assignment (seed 42)
+  manifest.json      # all run parameters + script SHA256
 ```
-
-**Total disk usage: ~17 GB**
 
 ---
 
-## manifest.json
-
-Records every parameter used so results are fully reproducible:
+## manifest.json (actual)
 
 ```json
 {
@@ -212,41 +200,58 @@ Records every parameter used so results are fully reproducible:
   "hop_seconds": 1.5,
   "n_mels": 128,
   "n_mfcc": 40,
-  "augmentation": true,
-  "label_map": { "background_animals": 0, ... },
+  "n_fft": 2048,
+  "win_length": 1102,
+  "hop_stft": 441,
+  "ebu_target_dbfs": -23,
+  "spec_augment_train": true,
+  "filter_augment_aug": true,
+  "curriculum_phases": ["A", "B", "C"],
+  "dir_calibration_ir": null,
   "splits": {
-    "train": { "original": 10232, "total": 71624 },
-    "val":   { "original": 3411,  "total": 3411  },
-    "test":  { "original": 3411,  "total": 3411  }
+    "train": { "clean": 10223, "aug_A": 10223, "aug_B": 20446, "aug_C": 30669 },
+    "val":   { "clean": 3392 },
+    "test":  { "clean": 3439 }
   },
-  "script_sha256": "ef07cc..."
+  "script_sha256": "9922489ab8ebef71948d6bd9bc9788f93740b6fcf552b3338cdf5182fcab18de"
 }
 ```
 
-The `script_sha256` hash ensures that if the preprocessing script ever changes, you can detect it and know the processed data may differ.
+The `script_sha256` lets you detect if the preprocessing script changed (and therefore that the
+processed data may differ).
 
 ---
 
 ## How to Re-run
 
 ```bash
-# Full run with augmentation (recommended)
+# Clean splits only (no augmentation) — fast, for debugging
 /opt/anaconda3/bin/python scripts/audio_preprocessing.py
 
-# Without augmentation (faster, for debugging)
-/opt/anaconda3/bin/python scripts/audio_preprocessing.py --no-aug
+# Full run: clean + all three curriculum phases (what the models were trained on)
+/opt/anaconda3/bin/python scripts/audio_preprocessing.py --aug-phase A B C
 
-# Smaller shards (useful if RAM is limited)
-/opt/anaconda3/bin/python scripts/audio_preprocessing.py --shard-size 500
+# A single phase (e.g. regenerate Phase B only)
+/opt/anaconda3/bin/python scripts/audio_preprocessing.py --aug-phase B
+
+# With deployment-mic impulse response (DIR calibration)
+/opt/anaconda3/bin/python scripts/audio_preprocessing.py --aug-phase A B C --dir-ir usb_mic_ir.wav
+
+# Smaller shards if RAM is limited
+/opt/anaconda3/bin/python scripts/audio_preprocessing.py --aug-phase A B C --shard-size 500
 ```
 
-> Re-running will overwrite existing shards in `data/processed/`.
+> Re-running overwrites existing shards in `data/processed/`. After regenerating, re-upload the Kaggle
+> datasets (`alertreck-mel2`, `alertreck-mfcc`) before retraining.
 
 ---
 
-## Known Issues Fixed
+## Notes
 
-| Issue | Fix |
-|---|---|
-| `soundfile` reads MP3 files as 0 seconds on Python 3.13 | MP3 files now decoded via `ffmpeg` subprocess |
-| `librosa.load` fails on Python 3.13 (`aifc` module removed) | Avoided for MP3; only used for pitch-shift augmentation |
+- **File-level split** (not window-level) is deliberate — it is the difference between an honest test
+  set and silent leakage between near-identical overlapping windows.
+- **EBU R128, not RMS-to-0.1** — the edge preprocessor matches this exactly. Any deviation (window
+  length, normalisation, or an extra filter) is train/serve skew and degrades live accuracy.
+- The deployment path adds **one** deliberate, training-absent step: a 50/60 Hz mains-hum high-pass to
+  counter field-mic hum (see [DEPLOYMENT.md](DEPLOYMENT.md) Part 6A) — it removes content absent from
+  training, so it reduces skew rather than adding it.

@@ -105,6 +105,59 @@ class EvidenceManager:
             self.save_failures += 1
             return None
     
+    def save_event_record(
+        self,
+        mel_spec: np.ndarray,
+        threat_info: dict,
+        location: dict,
+        audio_path: Optional[str],
+        alert_id: str,
+    ) -> Optional[str]:
+        """
+        Save the model input (mel spectrogram) and a metadata JSON alongside the
+        audio evidence, for the Grad-CAM explainability dashboard.
+
+        Writes two sidecar files next to the WAV:
+          <base>.mel.npy  — the exact (128, 301) mel the model classified
+          <base>.json     — class, confidence, per-class probabilities, location, time
+
+        Returns the JSON path, or None if disabled / failed.
+        """
+        if not self.save_enabled or audio_path is None:
+            return None
+
+        try:
+            import json
+            audio_p = Path(audio_path)
+            folder  = audio_p.parent
+            stem    = audio_p.stem
+
+            mel = np.asarray(mel_spec, dtype=np.float32)
+            if mel.ndim == 3:          # (1, 128, 301) → (128, 301)
+                mel = mel[0]
+            mel_path = folder / f"{stem}.mel.npy"
+            np.save(mel_path, mel)
+
+            record = {
+                "alert_id":            alert_id,
+                "threat_type":         threat_info.get("threat_type"),
+                "threat_level":        threat_info.get("threat_level"),
+                "confidence":          threat_info.get("confidence"),
+                "class_probabilities": threat_info.get("class_probabilities", {}),
+                "timestamp":           threat_info.get("timestamp"),
+                "location":            location or {},
+                "audio_file":          audio_p.name,
+                "mel_file":            mel_path.name,
+            }
+            json_path = folder / f"{stem}.json"
+            json_path.write_text(json.dumps(record, indent=2))
+
+            return str(json_path)
+
+        except Exception as e:
+            print(f"❌ Failed to save event record: {e}")
+            return None
+
     def _check_storage_limits(self):
         """Check and enforce storage limits."""
         try:

@@ -107,8 +107,23 @@ HPF_WIDTH_HZ  = 30.0    # raised-cosine transition width below the cutoff (reduc
 # ============================================================================
 # INFERENCE LOOP
 # ============================================================================
-INFERENCE_INTERVAL = 1.5     # seconds between inference runs (= hop length)
+INFERENCE_INTERVAL = 1.5     # seconds between inference runs (legacy timer mode)
 STATS_INTERVAL     = 3600    # seconds between statistics log lines
+
+# ── Onset-triggered inference ────────────────────────────────────────────────
+# When enabled, the system does NOT classify on a blind timer. It watches for an
+# energy onset above the adaptive background floor and classifies the 3 s window
+# around the event — more precise, less CPU, and the event is centred in the window.
+# Set ONSET_ENABLED = False to fall back to the fixed-interval timer loop.
+ONSET_ENABLED       = True
+ONSET_POLL_INTERVAL = 0.25   # seconds between onset checks (lower = more responsive)
+ONSET_TRIGGER_DB    = 10.0   # dB above the adaptive noise floor required to fire
+ONSET_REFRACTORY_S  = 2.0    # minimum seconds between triggers (debounce)
+ONSET_SETTLE_S      = 1.0    # wait after onset so the event centres in the 3 s buffer
+ONSET_FLOOR_ALPHA   = 0.10   # adaptive-floor EMA rate per poll (higher = faster tracking)
+ONSET_RECENT_S      = 0.5    # window of "recent" audio used for the current level
+ONSET_FRAME_MS      = 50     # frame size (ms) for energy measurement
+ONSET_MIN_RMS       = 0.01   # absolute floor — below this is silence, never triggers
 
 # ============================================================================
 # SIM808 CONFIGURATION  (GSM SMS + GPS — shared UART, no data plan required)

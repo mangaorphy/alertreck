@@ -99,6 +99,10 @@ pip install numpy librosa sounddevice soundfile onnxruntime pyserial psutil
 
 **On your Mac**, run from inside the `alertreck` project folder.
 
+> 📦 **Don't have the trained model?** The checkpoints, ONNX exports, and `results.json` are on
+> Google Drive: [Alertreck Data, Dataset & Models](https://drive.google.com/drive/folders/1U9BwIUNQ8Snl5RxR8LHthWfdOc_EdcTM?usp=sharing).
+> Download `models/custom_cnn/` to skip training and go straight to deployment.
+
 > **Environment:** the export needs `torch` + `onnx` + `onnxruntime`. These live in the **base**
 > conda env (`/opt/anaconda3/bin/python`), *not* the `alertreck` env (which only has the runtime
 > deps librosa/numpy). Use the base interpreter for export.

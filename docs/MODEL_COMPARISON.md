@@ -5,6 +5,11 @@ All models share the same 7-class dataset, the same 60/20/20 file-level split (s
 and the same three-phase augmentation curriculum (A → B → C).
 
 > **Status:** All 5 models trained.
+>
+> 📦 Trained checkpoints, ONNX exports, and `results.json` for every model are on Google Drive:
+> [Alertreck Data, Dataset & Models](https://drive.google.com/drive/folders/1U9BwIUNQ8Snl5RxR8LHthWfdOc_EdcTM?usp=sharing).
+> The numbers below are read directly from those `results.json` files; regenerate every chart with
+> [`notebooks/00-model-report.ipynb`](../notebooks/00-model-report.ipynb).
 
 ---
 
