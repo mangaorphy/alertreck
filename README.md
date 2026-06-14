@@ -11,6 +11,15 @@ trained on the same data and benchmarked, then the best edge candidate is deploy
 
 ---
 
+## 🎥 Demo Video
+
+A full walkthrough of the system — training, the edge device, live detection, and the Grad-CAM
+dashboard:
+
+### → **[Watch the Alertreck demo on YouTube](https://youtu.be/PSdcE1NN21c)**
+
+---
+
 ## Data, Dataset & Models
 
 The raw audio, processed feature shards, and trained model artifacts are **too large for git** and live
@@ -152,7 +161,7 @@ highest-stakes class). The **CNN** is deployed (smallest, self-contained, real-t
 **ProtoNet** is the accuracy benchmark. Among anomaly detectors the classical **OC-SVM** clearly beats
 the deep **Conv-AE**. Full analysis: **[docs/MODEL_COMPARISON.md](docs/MODEL_COMPARISON.md)**.
 
-Reproduce every chart in **[notebooks/00-model-report.ipynb](notebooks/00-model-report.ipynb)** — class
+**[notebooks/00-model-report.ipynb](notebooks/00-model-report.ipynb)** — class
 distributions, all-model metrics, and Grad-CAM.
 
 ---

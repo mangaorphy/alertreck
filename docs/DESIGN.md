@@ -1,7 +1,7 @@
 # Alertreck — System Design Document
 
-**Version:** 2.0
-**Last Updated:** April 2026
+**Version:** 3.0
+**Last Updated:** June 2026
 **Author:** Orpheus Manga
 
 ---
@@ -44,9 +44,9 @@ The system trades model size for inference speed and resilience: a 1.2 M-paramet
 │  ┌─────────────┐   ┌──────────────┐   ┌──────────────┐               │
 │  │  USB Mic    │──▶│  Audio       │──▶│  Mel         │               │
 │  │  44.1 kHz   │   │  Recorder    │   │  Preprocess  │               │
-│  └─────────────┘   │  (3 s buf)   │   │  +HPF +RMS   │               │
-│                    └──────────────┘   └──────┬───────┘               │
-│                                              │ (1, 128, 259)         │
+│  └─────────────┘   │  (3 s buf,   │   │  EBU + HPF   │               │
+│                    │  onset-trig) │   └──────┬───────┘               │
+│                    └──────────────┘          │ (1, 128, 301)         │
 │                                              ▼                       │
 │  ┌─────────────┐   ┌──────────────┐   ┌──────────────┐               │
 │  │  Evidence   │◀──│  Decision    │◀──│  ONNX        │               │
@@ -58,19 +58,23 @@ The system trades model size for inference speed and resilience: a 1.2 M-paramet
 │  ┌──────┴───────┐         │                                          │
 │  │  Alert       │◀────────┘                                          │
 │  │  Notifier    │                                                    │
-│  │  (console,   │                                                    │
-│  │   GSM stub)  │                                                    │
+│  │  (console +  │                                                    │
+│  │   SIM808 SMS)│                                                    │
 │  └──────────────┘                                                    │
 │                                                                      │
 │  ┌──────────────┐                                                    │
-│  │  GPS Reader  │  (optional, /dev/ttyUSB0)                          │
+│  │  GPS Reader  │  (SIM808, /dev/ttyAMA0)                            │
 │  │  NMEA→coords │                                                    │
 │  └──────────────┘                                                    │
 │                                                                      │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-The system runs a single inference loop. A rolling 3-second audio buffer is sampled every 1.5 seconds; each sample is preprocessed, classified, and routed through the decision engine, which maintains per-class thresholds and cooldowns to suppress alert spam.
+The system runs a single inference loop. A rolling 3-second audio buffer is monitored by an
+**onset detector** (adaptive noise floor); when an energy onset is detected the window around it is
+preprocessed, classified, and routed through the decision engine, which maintains per-class thresholds
+and cooldowns to suppress alert spam. Each detection also saves a mel + metadata sidecar consumed by the
+off-device **Grad-CAM dashboard** (`dashboard/`).
 
 ---
 
@@ -101,10 +105,13 @@ alertreck/
 │       └── training_curves.png
 │
 ├── notebooks/                      Kaggle T4 training notebooks
-│   ├── 03a_train_cnn.ipynb         CNN from scratch
-│   ├── 03b_train_tiny_ast.ipynb    Vision Transformer (ViT-Tiny)
-│   ├── 04a_train_conv_ae.ipynb     Convolutional Autoencoder (TODO)
-│   └── 04b_train_oc_svm.ipynb      One-Class SVM (TODO)
+│   ├── 00-model-report.ipynb       Consolidated report (data viz + metrics + Grad-CAM)
+│   ├── 02b-prepare-w2v2-embeddings.ipynb
+│   ├── 03a-train-cnn.ipynb         CNN from scratch  (deployed)
+│   ├── 03b-train-protonet.ipynb    Prototypical Network (few-shot)
+│   ├── 04a-train-w2v2-l2.ipynb     Frozen wav2vec2 layer-2 + head
+│   ├── 04b-train-conv-ae.ipynb     Convolutional Autoencoder
+│   └── 04c-train-oc-svm.ipynb      One-Class SVM
 │
 ├── scripts/
 │   ├── audio_extraction/           Per-source data downloaders
@@ -117,7 +124,8 @@ alertreck/
     ├── config.py                   All thresholds, paths, constants
     ├── audio/
     │   ├── recorder.py             USB mic capture, rolling buffer
-    │   └── preprocess.py           Mel spectrogram + HPF + RMS norm
+    │   ├── onset.py                Adaptive energy-onset detector (triggers inference)
+    │   └── preprocess.py           Mel spectrogram + EBU R128 + hum high-pass
     ├── inference/
     │   ├── model.py                ONNX Runtime wrapper
     │   └── decision.py             Per-class threshold + cooldown logic
@@ -157,27 +165,39 @@ A **manifest CSV** (`data/processed/manifest.csv`) records every file's source, 
 | Step | Detail | Reason |
 |---|---|---|
 | Resample | 44,100 Hz mono | Captures full acoustic range; consistent across sources |
-| RMS normalisation | target = 0.1 | Removes recording-volume bias from training signal |
+| Loudness norm | EBU R128 → −23 dBFS, clipped to [−1, 1] | Removes recording-volume bias; volume-invariant features |
 | Window | 3 s clips, 50% overlap (hop = 1.5 s) | Multiplies training samples; detects events at any phase |
-| Augmentation (train only) | ×6 per window: time-shift ±200 ms, gain ±6 dB, pitch ±2 st, noise @ 5/10/20 dB SNR | Domain robustness for field deployment |
-| Feature: log-mel | 128 bins, n_fft=2048, hop=512 → (128, 259) | Used by CNN and ViT |
-| Feature: MFCC+Δ+ΔΔ | 40 coeffs × 3 derivatives → (120, 259) | Used by Conv-AE and OC-SVM |
+| Augmentation (train only) | Three-phase curriculum A→B→C (1/2/3 copies, rising SNR/severity): noise, RIR, lowpass, mp3, gain, clip + SpecAugment + FilterAugment | Domain robustness for field deployment |
+| Feature: log-mel | 128 bins, n_fft=2048, win=1102, hop=441 → **(128, 301)** | Used by CNN, ProtoNet, Conv-AE |
+| Feature: MFCC+Δ+ΔΔ | 40 coeffs × 3 derivatives → **(120, 301)** | Used by OC-SVM |
 | Storage | NPZ shards of 1,000 samples | Fast random access, compressed |
 
 **Reproducibility:** seed = 42 throughout; `script_sha256` hash recorded in `manifest.json` so any change to the script is detectable.
 
-**Split:** stratified 60 / 20 / 20 by class on the fine-grained labels — every class keeps proportional representation in train/val/test.
+**Split:** stratified 60 / 20 / 20 at the **file level** (all windows of one file stay in one split) — preserves class proportions *and* prevents leakage between overlapping windows. See [AUDIO_PREPROCESSING.md](AUDIO_PREPROCESSING.md) for the full pipeline and curriculum.
+
+> W2V2-L2 does not use these shards — it consumes raw 16 kHz audio through the frozen `wav2vec2-base`
+> backbone (notebook `02b`).
 
 ### 5.3 Stage 3 — Training (Kaggle T4)
 
-Each model trains independently on the same NPZ shards. Test set is never augmented to ensure honest evaluation.
+Each model trains independently on the same NPZ shards (W2V2-L2 on raw-audio embeddings). The test set
+is never augmented, to ensure honest evaluation. Five models span four ML paradigms.
 
-| Model | Status | Test Acc | Test F1 |
-|---|---|---|---|
-| CNN from scratch | ✅ Done | 98.09% | 0.978 |
-| Tiny-AST (ViT-Tiny) | 🟡 Training | — | — |
-| Conv-AE | ⬜ Pending | — | — |
-| OC-SVM | ⬜ Pending | — | — |
+| Model | Paradigm | Status | Test Acc | Macro F1 | AUC |
+|---|---|---|---|---|---|
+| CNN from scratch | Supervised | ✅ **Deployed** | 0.9264 | 0.9166 | — |
+| ProtoNet | Few-shot metric | ✅ Done | **0.9311** | 0.9205 | **0.9938** |
+| W2V2-L2 (frozen transfer) | Out-of-species transfer | ✅ Done | 0.9297 | **0.9210** | 0.9911 |
+| Conv-AE | Unsupervised anomaly | ✅ Done | 0.5147† | — | 0.6033† |
+| OC-SVM | Classical anomaly | ✅ Done | 0.5100† | — | 0.7790† |
+
+† Conv-AE / OC-SVM are binary anomaly detectors (threat vs background); metrics are binary.
+
+The three discriminative models are statistically tied at the top, all near-perfect on gunshot (F1 ≈
+0.997). The **CNN** is deployed for its small, self-contained footprint. Full analysis:
+[MODEL_COMPARISON.md](MODEL_COMPARISON.md). *(tiny-AST was dropped 2026-06-01 in favour of W2V2-L2 — see
+[ROADMAP.md](ROADMAP.md).)*
 
 ### 5.4 Stage 4 — Export
 
@@ -202,7 +222,8 @@ ONNX was chosen over TFLite because:
 | Module | Responsibility | Key Class |
 |---|---|---|
 | `audio/recorder.py` | Captures mic audio in a background thread; maintains a rolling deque buffer | `AudioRecorder` |
-| `audio/preprocess.py` | Converts a raw waveform to a (1, 128, 259) mel spectrogram | `AudioPreprocessor` |
+| `audio/onset.py` | Tracks an adaptive noise floor; fires when energy rises above it | `OnsetDetector` |
+| `audio/preprocess.py` | Converts a raw waveform to a (1, 128, 301) mel spectrogram (EBU R128 + hum HPF) | `AudioPreprocessor` |
 | `inference/model.py` | Loads ONNX model and runs softmax on logits | `ONNXModel` |
 | `inference/decision.py` | Applies per-class threshold + per-class cooldown | `ThreatDecisionEngine` |
 | `sensors/gps.py` | Reads NMEA over UART, parses lat/lon | `GPSReader` |
@@ -214,14 +235,17 @@ ONNX was chosen over TFLite because:
 ### 6.2 Inference Loop (main.py)
 
 ```
-every INFERENCE_INTERVAL (1.5 s):
+poll every ONSET_POLL_INTERVAL (0.25 s):
     1. wait for buffer ready (3 s of audio)
-    2. snapshot the buffer → numpy array (132 300 samples)
-    3. preprocess:
+    2. onset detector: trigger if recent energy ≥ ONSET_TRIGGER_DB above the
+       adaptive noise floor (and past the refractory window); else loop
+    3. on trigger: settle ONSET_SETTLE_S so the event centres in the buffer,
+       then snapshot the buffer → numpy array (132 300 samples)
+    3b. preprocess:
          a. silence gate (skip if RMS < SILENCE_THRESHOLD)
-         b. high-pass filter @ 120 Hz (remove electrical hum)
-         c. RMS-normalise to 0.1
-         d. compute 128-bin log-mel spectrogram
+         b. high-pass filter @ 90 Hz (remove 50/60 Hz mains hum)
+         c. EBU R128 loudness normalisation (−23 dBFS)
+         d. compute 128-bin log-mel spectrogram → (1, 128, 301)
     4. inference:
          a. ONNX session.run → logits
          b. softmax → probabilities
@@ -267,7 +291,7 @@ if rms < SILENCE_THRESHOLD:    # default 0.01
     return None                # skip this window
 ```
 
-This is paired with a 4th-order Butterworth high-pass filter at 120 Hz to remove 50/60 Hz mains hum and harmonics that the model would otherwise misclassify.
+This is paired with an FFT high-pass filter at 90 Hz (`HPF_CUTOFF_HZ`, raised-cosine transition) that removes the 50/60 Hz mains-hum the model would otherwise misclassify as `threat_vehicle`. Because the training audio had no such hum, removing it brings the served signal *closer* to the training distribution rather than adding train/serve skew.
 
 ### 6.5 Evidence Layout
 
@@ -349,8 +373,9 @@ python3 -m alertrack.main
 
 ```ini
 [Service]
-WorkingDirectory=/home/pi/alertreck
-ExecStart=/home/pi/alertreck/venv/bin/python3 -m alertrack.main
+User=alertreck
+WorkingDirectory=/home/alertreck/alertreck
+ExecStart=/home/alertreck/alertreck/venv/bin/python -m alertrack.main
 Restart=always
 RestartSec=10
 ```
@@ -406,29 +431,35 @@ The service auto-restarts on crash with a 10-second delay. Logs are written to b
 **Chose:** 3 s with 50 % overlap.
 **Why:** Long enough to capture a gunshot echo or a chainsaw burst, short enough to keep inference latency ≤ 1.5 s.
 
-### 9.5 Pretrained vs From Scratch
+### 9.5 Four-Paradigm Model Comparison
 
-**Comparing:** ViT-Tiny (pretrained ImageNet) vs CNN from scratch.
-**Why both:** Capstone evaluation requires understanding whether transfer learning from a non-audio domain helps acoustic classification. Both train on the same data for fair comparison.
+**Comparing:** supervised CNN, few-shot ProtoNet, frozen out-of-species transfer (W2V2-L2), and two
+anomaly detectors (Conv-AE, OC-SVM).
+**Why:** the capstone evaluates which learning paradigm best suits scarce, domain-shifted acoustic data.
+*(tiny-AST — a fine-tuned audio transformer — was the original transfer arm but was dropped 2026-06-01:
+fine-tuning a transformer on a small corpus overfits under domain shift. A frozen, truncated wav2vec 2.0
+layer-2 embedding is a genuinely distinct paradigm and a better fit. See [ROADMAP.md](ROADMAP.md).)*
 
-### 9.6 Local Storage Only (No Cloud)
+### 9.6 Offline-First Alerting
 
-**Considered:** Streaming alerts to a cloud dashboard via cellular.
-**Chose:** Local-only for now; GSM stub left in `notifier.py`.
-**Why:** Field deployment must work offline first. Cellular is intermittent in remote parks. Future work: integrate SIM800L + LoRaWAN.
+**Chose:** offline-first GSM/SMS via SIM808, with GPS coordinates — no internet dependency.
+**Why:** cellular SMS reaches rangers where data coverage is intermittent. Explainability (Grad-CAM) is
+served by an **off-device dashboard** that syncs detections over the LAN when one is available, keeping
+the Pi itself lean (ONNX-only). Both are implemented (`alertrack/alerts/notifier.py`, `dashboard/`).
 
 ---
 
 ## 10. Future Work
 
-| Item | Priority |
+| Item | Status / Priority |
 |---|---|
-| Complete Conv-AE and OC-SVM models | High (capstone) |
+| Five models across four paradigms | ✅ Done |
+| SIM808 GSM/SMS + GPS alerting | ✅ Done |
+| Grad-CAM explainability dashboard | ✅ Done |
+| Onset-triggered inference | ✅ Done |
 | Cross-model latency benchmark on Pi 4 | High |
 | Quantise CNN to int8 with onnxruntime quantization | Medium |
-| Integrate SIM800L for GSM SMS alerts | Medium |
 | Add LoRaWAN module for low-power transmission | Low |
-| Web dashboard for evidence review | Low |
 | Onboard model retraining loop (active learning) | Research |
 
 ---

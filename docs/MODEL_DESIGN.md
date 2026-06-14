@@ -12,10 +12,10 @@ Alertreck trains five models across four learning paradigms on identical data to
 
 | # | Model | Paradigm | Input | Framework |
 |---|---|---|---|---|
-| 1 | CNN | Supervised | 128-bin log-mel (128 × 300) | TensorFlow 2.x |
-| 2 | ProtoNet | Metric learning | 128-bin log-mel (128 × 300) | PyTorch |
+| 1 | CNN | Supervised | 128-bin log-mel (128 × 301) | PyTorch |
+| 2 | ProtoNet | Metric learning | 128-bin log-mel (128 × 301) | PyTorch |
 | 3 | W2V2-L2 | Frozen transfer | Raw waveform @ 16 kHz | HuggingFace + torchaudio |
-| 4 | Conv-AE | Unsupervised anomaly | 128-bin log-mel (128 × 300) | TensorFlow 2.x |
+| 4 | Conv-AE | Unsupervised anomaly | 128-bin log-mel (128 × 301) | PyTorch |
 | 5 | OC-SVM | Classical one-class | 120-dim MFCC+Δ+ΔΔ | scikit-learn |
 
 **Seven-class taxonomy:** `background_animals`, `background_wind_rain`, `threat_gunshot`, `threat_chainsaw`, `threat_vehicle`, `threat_human`, `threat_dog`
@@ -35,14 +35,14 @@ Primary production model deployed on Pi 4. Establishes the supervised upper boun
 ```
 128-bin log-mel spectrogram
   window : 25 ms (Hann), hop : 10 ms
-  shape  : (1, 128, 300)   — (channels, mel_bins, time_frames)
+  shape  : (1, 128, 301)   — (channels, mel_bins, time_frames)
   origin : data/processed/mel/{split}/
 ```
 
 ### 2.3 Architecture
 
 ```
-Input (1, 128, 300)
+Input (1, 128, 301)
   │
   ├── Block 1: Conv2D(32, 3×3) → BN → ReLU → MaxPool(2×2) → Dropout(0.25)
   ├── Block 2: Conv2D(64, 3×3) → BN → ReLU → MaxPool(2×2) → Dropout(0.25)
@@ -76,9 +76,9 @@ SpecAugment (freq/time masking), FilterAugment (random EQ), Mixup (α = 0.4), co
 ### 2.6 Deployment
 
 ```
-best_model.keras → export_model.py → alertreck_cnn.onnx (INT8 quantised)
-                                       ↓
-                               ONNX Runtime on Pi 4
+best_model.pt → export_model.py → alertreck_cnn.onnx (fp32, opset 17, dynamic batch + frames)
+                                     ↓
+                             ONNX Runtime on Pi 4 (CPU)
                                inference latency < 1.5 s / window
 ```
 
@@ -94,7 +94,7 @@ Few-shot-capable metric learning baseline. Reuses the CNN encoder; only the prot
 
 ### 3.2 Input
 
-Same log-mel shards as CNN: `(1, 128, 300)` from `data/processed/mel/`.
+Same log-mel shards as CNN: `(1, 128, 301)` from `data/processed/mel/`.
 
 ### 3.3 Architecture
 
@@ -239,7 +239,7 @@ Learns a compressed representation of background-only audio. At inference, high 
 ### 5.2 Input
 
 ```
-128-bin log-mel spectrogram (1, 128, 300)
+128-bin log-mel spectrogram (1, 128, 301)
 Training: background_animals + background_wind_rain clips ONLY
 Inference: all classes — anomaly score = MSE reconstruction error
 ```
@@ -248,7 +248,7 @@ Inference: all classes — anomaly score = MSE reconstruction error
 
 ```
 Encoder
-  Input  (1, 128, 300)
+  Input  (1, 128, 301)
   Conv2D(16, 3×3) → BN → ReLU → MaxPool(2×2)    →  (16,  64, 150)
   Conv2D(32, 3×3) → BN → ReLU → MaxPool(2×2)    →  (32,  32,  75)
   Conv2D(64, 3×3) → BN → ReLU → MaxPool(2×2)    →  (64,  16,  37)
@@ -258,8 +258,8 @@ Decoder
   Dense(128) → reshape (64, 16, 37)
   ConvTranspose2D(64, 3×3) → BN → ReLU → Upsample  →  (64, 32, 75)
   ConvTranspose2D(32, 3×3) → BN → ReLU → Upsample  →  (32, 64, 150)
-  ConvTranspose2D(16, 3×3) → BN → ReLU → Upsample  →  (16, 128, 300)
-  ConvTranspose2D(1,  1×1) → Sigmoid                →  (1,  128, 300)
+  ConvTranspose2D(16, 3×3) → BN → ReLU → Upsample  →  (16, 128, 301)
+  ConvTranspose2D(1,  1×1) → Sigmoid                →  (1,  128, 301)
 ```
 
 ### 5.4 Training
@@ -282,8 +282,9 @@ At test time, report per-class AUC-ROC treating each threat class as the positiv
 ### 5.6 Deployment
 
 ```
-Encoder + Decoder → TFLite INT8 (symmetric quantisation)
+Encoder + Decoder → ONNX (opset 17)
 Inference: compute mel → run AE → MSE vs background distribution → threshold → alert/no alert
+(Note: Conv-AE is a documented negative result — gunshot AUC 0.37 — and is not deployed.)
 ```
 
 The AE cannot report *which* threat is present — only that something unusual is detected. At deployment, the CNN is the primary classifier; Conv-AE is a complementary anomaly signal.

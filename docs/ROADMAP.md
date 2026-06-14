@@ -71,7 +71,7 @@ These are fixed by the approved proposal (May 2026). Deviations require supervis
 | 32 GB Class 10 MicroSD card | Class 10, read ≥ 45 MB/s | OS, model weights, SQLite event database, evidence audio | ● in hand · Pi OS installed |
 | Rwanda SIM card (MTN or Airtel) | Prepaid, GSM only (no data plan required) | Cellular network access for SMS delivery | ● in hand |
 
-**Operational budgets:** ≤ USD 80 BOM · ≤ 5 W continuous · < 30 s end-to-end latency · TFLite INT8 · model < 10 MB
+**Operational budgets:** ≤ USD 80 BOM · ≤ 5 W continuous · < 30 s end-to-end latency · ONNX · model < 10 MB
 
 ### 1.6 Experimental controls (ensures fair comparison across all 5 models)
 
@@ -391,22 +391,22 @@ Ten stages across eight proposal phases. Each stage maps to a proposal section a
 
 ---
 
-### Stage 6 — Edge deployment (TFLite INT8 · Pi 4 integration) ○
+### Stage 6 — Edge deployment (ONNX · Pi 4 integration) ○
 
-**Goal:** Convert winning model to TFLite INT8 and integrate into the `alertrack/` runtime daemon.
+**Goal:** Export winning model to ONNX and integrate into the `alertrack/` runtime daemon.
 **Proposal ref:** §3.5.1, §3.4
 **Proposal week:** W8
 
 **Tasks:**
-1. Post-training quantisation: winning model → TFLite INT8 via `scripts/export_model.py`
+1. Export winning model → ONNX (opset 17) via `scripts/export_model.py`
 2. Verify: model size < 10 MB; accuracy degradation < 2 % from float32 baseline
-3. Integrate TFLite model into [alertrack/inference/model.py](alertrack/inference/model.py)
+3. Integrate ONNX model into [alertrack/inference/model.py](alertrack/inference/model.py)
 4. Wire [alertrack/audio/recorder.py](alertrack/audio/recorder.py) → [alertrack/audio/preprocess.py](alertrack/audio/preprocess.py) → `ModelInference`
 5. Benchmark on Pi 4: end-to-end inference latency (audio capture → class label) — target < 25 s (leaving 5 s margin for SMS transmission)
 6. Benchmark continuous power draw — target ≤ 5 W
 7. Validate systemd service auto-restart on [alertrack/alertrack.service](alertrack/alertrack.service)
 
-**Artefact:** Deployed TFLite model in `models/` · updated `alertrack/` runtime · latency + energy benchmark report
+**Artefact:** Deployed ONNX model in `models/` · updated `alertrack/` runtime · latency + energy benchmark report
 
 ---
 
@@ -524,7 +524,7 @@ Ten stages across eight proposal phases. Each stage maps to a proposal section a
 | 4b | Conv-AE training | ○ | Unlocks learnability filter (step 6e) in preprocessing |
 | 4c | OC-SVM training | ○ | After Conv-AE threshold established |
 | 5 | Comparative evaluation | ○ | All nine techniques on all five models across four paradigms |
-| 6 | Edge deployment | ◐ skeleton | Convert winning model to TFLite INT8; plug into `alertrack/` daemon |
+| 6 | Edge deployment | ◐ skeleton | Export winning model to ONNX; plug into `alertrack/` daemon |
 | 7 | SIM808 GPS + GSM | ◐ skeleton | Hardware in hand; wire NMEA reader + AT command SMS; add ranger numbers to `config.py` |
 | 8 | Grad-CAM + dashboard | ○ | After winning model selected in Stage 5 |
 | 9 | Final report + submission | ○ | `make reproduce` + thesis writing |

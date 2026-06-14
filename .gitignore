@@ -15,6 +15,9 @@ rootkey.csv
 .aws/
 credentials
 
+# wandb
+wandb/
+
 # Python
 __pycache__/
 *.py[cod]
