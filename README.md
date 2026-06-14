@@ -9,6 +9,12 @@ It is also a comparative research study: **five models across four machine-learn
 trained on the same data and benchmarked, then the best edge candidate is deployed with a live
 **Grad-CAM explainability dashboard**.
 
+**Repository:** <https://github.com/mangaorphy/alertreck>
+
+```bash
+git clone https://github.com/mangaorphy/alertreck.git
+```
+
 ---
 
 ## 🎥 Demo Video
