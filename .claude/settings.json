@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pkill -f \"[d]ownload_gunshots\")",
+      "Bash(PATH=/opt/anaconda3/bin:__TRACKED_VAR__ nohup /opt/anaconda3/bin/python scripts/audio_extraction/download_topup_2000.py --target 2000)",
+      "Bash(pkill -f \"[d]ownload_topup\")",
+      "Bash(PATH=/opt/anaconda3/bin:__TRACKED_VAR__ nohup /opt/anaconda3/bin/python -u scripts/audio_extraction/download_topup_2000.py --target 2000)",
+      "Bash(echo \"restarted PID $!\")",
+      "Bash(grep -vE \"^\\\\s*$|ffmpeg exited|Video unavailable|Sign in to confirm\" data/logs/topup_2000.log)",
+      "Bash(/opt/anaconda3/bin/python -c \"import torch;print\\(torch.__version__, 'cuda' if torch.cuda.is_available\\(\\) else 'cpu', 'mps' if getattr\\(torch.backends,'mps',None\\) and torch.backends.mps.is_available\\(\\) else ''\\)\")",
+      "Bash(PATH=/opt/anaconda3/bin:__TRACKED_VAR__ nohup /opt/anaconda3/bin/python -u scripts/audio_preprocessing.py)",
+      "Bash(grep -vE \"^\\\\s*$\" data/logs/preprocess.log)",
+      "Bash(PATH=/opt/anaconda3/bin:__TRACKED_VAR__ nohup /opt/anaconda3/bin/python -u scripts/audio_preprocessing.py --aug-phase A B C --shard-size 1000)",
+      "Bash(grep -vE \"^\\\\s*$\")",
+      "Bash(/opt/anaconda3/bin/python -c \"import json;d=json.load\\(open\\('models/custom_cnn/results.json'\\)\\);[print\\(f'{k}: {v}'\\) for k,v in d.items\\(\\) if k!='history']\")",
+      "Bash(python3 -c ' *)",
+      "Bash(python3 -)",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('scripts/audio_preprocessing.py'\\).read\\(\\)\\); ast.parse\\(open\\('scripts/grouping.py'\\).read\\(\\)\\); ast.parse\\(open\\('scripts/regenerate_splits.py'\\).read\\(\\)\\); print\\('all parse OK'\\)\")",
+      "Bash(python3 scripts/regenerate_splits.py)",
+      "Bash(/opt/anaconda3/bin/python -c ' *)"
+    ]
+  }
+}

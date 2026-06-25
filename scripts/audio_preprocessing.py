@@ -50,8 +50,9 @@ from pathlib import Path
 import librosa
 import numpy as np
 import soundfile as sf
-from sklearn.model_selection import train_test_split
 from tqdm import tqdm
+
+from grouping import group_aware_split
 
 warnings.filterwarnings("ignore")
 
@@ -70,6 +71,19 @@ WIN_LENGTH  = 1102                  # 25 ms @ 44.1 kHz
 HOP_STFT    = 441                   # 10 ms @ 44.1 kHz
 
 EBU_TARGET  = 10 ** (-23.0 / 20.0) # −23 dBFS ≈ 0.07079
+
+# ── event-based window selection (reduces weak-label noise) ───────────────────
+# For impulsive classes the event is a brief energy spike inside a long clip;
+# blind windowing labels the silent windows as "threat" too. For these classes we
+# keep only windows centred on an energy onset above the clip's own background
+# floor. Continuous classes (vehicle, human, wind, animals) fill the whole clip,
+# so they keep blind overlapping windows. Mirrors alertrack/audio/onset.py.
+EVENT_SELECT_CLASSES = {"threat_gunshot", "threat_dog"}
+EVENT_HPF_HZ    = 180.0   # ignore <180 Hz (hum/rumble) when measuring energy
+EVENT_FRAME_MS  = 50      # energy frame size
+EVENT_TRIGGER_DB = 8.0    # dB above the clip's background floor to count as an event
+EVENT_FLOOR_PCT = 20      # percentile of frame energy taken as the background floor
+EVENT_MERGE_S   = 1.0     # onsets closer than this collapse into one event
 
 FOLDER_TO_LABEL: dict[str, int] = {
     "background_animals":   0,
@@ -147,6 +161,69 @@ def slice_windows(audio: np.ndarray) -> list[np.ndarray]:
     while start + CLIP_SAMPLES <= len(audio):
         wins.append(audio[start: start + CLIP_SAMPLES].copy())
         start += HOP_SAMPLES
+    return wins
+
+
+def _highpass(x: np.ndarray, cutoff: float) -> np.ndarray:
+    """Zero-phase FFT high-pass — used only for the energy measurement."""
+    if cutoff <= 0 or len(x) < 8:
+        return x
+    n = len(x)
+    X = np.fft.rfft(x)
+    f = np.fft.rfftfreq(n, 1.0 / SR)
+    X[f < cutoff] = 0.0
+    return np.fft.irfft(X, n=n).astype(np.float32)
+
+
+def _window_at(audio: np.ndarray, center: int) -> np.ndarray:
+    """A CLIP_SAMPLES window centred on `center`, clamped to the clip and padded."""
+    half  = CLIP_SAMPLES // 2
+    start = int(np.clip(center - half, 0, max(0, len(audio) - CLIP_SAMPLES)))
+    win   = audio[start: start + CLIP_SAMPLES]
+    if len(win) < CLIP_SAMPLES:
+        win = np.pad(win, (0, CLIP_SAMPLES - len(win)))
+    return win.copy()
+
+
+def select_event_windows(audio: np.ndarray) -> list[np.ndarray]:
+    """Windows centred on energy onsets above the clip's background floor.
+
+    For impulsive classes this drops the silent/background windows that blind
+    slicing would mislabel as a threat. Falls back to the single loudest window
+    when no clear onset is found, so a clip is never lost entirely.
+    """
+    if len(audio) <= CLIP_SAMPLES:
+        return slice_windows(audio)                     # too short to localise
+
+    frame_len = max(1, int(SR * EVENT_FRAME_MS / 1000))
+    hp = _highpass(audio, EVENT_HPF_HZ)
+    n  = len(hp) // frame_len
+    frames  = hp[: n * frame_len].reshape(n, frame_len)
+    db      = 20.0 * np.log10(np.sqrt(np.mean(frames ** 2, axis=1)) + 1e-10)
+    centers = ((np.arange(n) + 0.5) * frame_len).astype(int)
+
+    floor     = float(np.percentile(db, EVENT_FLOOR_PCT))
+    triggered = np.where(db >= floor + EVENT_TRIGGER_DB)[0]
+    if triggered.size == 0:
+        return [_window_at(audio, int(centers[int(np.argmax(db))]))]
+
+    merge_gap = int(EVENT_MERGE_S * 1000 / EVENT_FRAME_MS)
+    groups, cur = [], [int(triggered[0])]
+    for i in triggered[1:]:
+        if i - cur[-1] <= merge_gap:
+            cur.append(int(i))
+        else:
+            groups.append(cur)
+            cur = [int(i)]
+    groups.append(cur)
+
+    wins, used = [], []
+    for g in groups:
+        peak = int(centers[g[int(np.argmax(db[g]))]])
+        if any(abs(peak - c) < HOP_SAMPLES for c in used):
+            continue                                    # near-duplicate window
+        used.append(peak)
+        wins.append(_window_at(audio, peak))
     return wins
 
 
@@ -364,8 +441,10 @@ def _process_file(args: tuple) -> list[dict]:
 
     label = FOLDER_TO_LABEL[cls]
     meta  = f"{cls}|{Path(path_str).relative_to(REPO_ROOT)}"
+    windows = (select_event_windows(audio) if cls in EVENT_SELECT_CLASSES
+               else slice_windows(audio))
     out   = []
-    for win in slice_windows(audio):
+    for win in windows:
         mel  = extract_mel(win)
         mfcc = extract_mfcc_delta(win)
         if do_specaug:
@@ -385,8 +464,10 @@ def _process_file_aug(args: tuple) -> list[dict]:
 
     label = FOLDER_TO_LABEL[cls]
     meta  = f"{cls}|{Path(path_str).relative_to(REPO_ROOT)}|aug_{phase}"
+    windows = (select_event_windows(audio) if cls in EVENT_SELECT_CLASSES
+               else slice_windows(audio))
     out   = []
-    for win in slice_windows(audio):
+    for win in windows:
         for aug in compound_augment(win, phase):
             if not learnability_ok(aug):
                 continue
@@ -425,20 +506,9 @@ def make_splits(files: dict[str, list[Path]]) -> dict[str, list[tuple[str, Path]
         print("  splits.json stale (files moved?), rebuilding …")
 
     all_items = [(cls, p) for cls, paths in sorted(files.items()) for p in paths]
-    strat     = [cls for cls, _ in all_items]
-    idx       = list(range(len(all_items)))
-
-    idx_tv, idx_te = train_test_split(idx, test_size=0.20,
-                                      stratify=strat, random_state=SEED)
-    idx_tr, idx_va = train_test_split(idx_tv, test_size=0.25,
-                                      stratify=[strat[i] for i in idx_tv],
-                                      random_state=SEED)
-
-    splits = {
-        "train": [all_items[i] for i in idx_tr],
-        "val":   [all_items[i] for i in idx_va],
-        "test":  [all_items[i] for i in idx_te],
-    }
+    # group-aware: keep every parent recording's segments within one split so the
+    # model can't memorise a recording that appears in both train and test
+    splits = group_aware_split(all_items, seed=SEED)
     SPLITS_JSON.parent.mkdir(parents=True, exist_ok=True)
     SPLITS_JSON.write_text(json.dumps(
         {s: [(c, str(p)) for c, p in recs] for s, recs in splits.items()}, indent=2))
@@ -452,6 +522,10 @@ class ShardWriter:
     def __init__(self, mel_dir: Path, mfcc_dir: Path, shard_size: int):
         mel_dir.mkdir(parents=True, exist_ok=True)
         mfcc_dir.mkdir(parents=True, exist_ok=True)
+        # purge stale shards from a previous run — sequential shard_NNN names mean
+        # a shorter run would otherwise leave orphaned high-numbered shards behind
+        for stale in (*mel_dir.glob("*.npz"), *mfcc_dir.glob("*.npz")):
+            stale.unlink()
         self._mel_dir  = mel_dir
         self._mfcc_dir = mfcc_dir
         self._size     = shard_size

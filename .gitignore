@@ -79,6 +79,7 @@ models/tiny_ast/
 dataset/
 data/
 ESC-50-master/
+META_DATA_CSV
 
 # Audio files (large)
 *.wav

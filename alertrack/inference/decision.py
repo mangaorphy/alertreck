@@ -96,10 +96,20 @@ class ThreatDecisionEngine:
         # ── Fire! ─────────────────────────────────────────────────────────────
         self.last_alert_times[class_name] = now
 
+        # Top-3 predictions (highest confidence first) — sent to rangers so they
+        # can judge a borderline call. e.g. gunshot 71% / human 22% / vehicle 5%
+        # signals more uncertainty than gunshot 96% / wind 3% / animals 1%.
+        order = np.argsort(probabilities)[::-1][:3]
+        top_predictions = [
+            {"class": CLASS_NAMES[i], "confidence": float(probabilities[i])}
+            for i in order
+        ]
+
         threat_info = {
             "threat_type":        class_name,
             "threat_level":       level,
             "confidence":         float(confidence),
+            "top_predictions":    top_predictions,
             "class_probabilities": {
                 CLASS_NAMES[i]: float(probabilities[i])
                 for i in range(len(probabilities))

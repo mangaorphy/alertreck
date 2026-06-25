@@ -26,6 +26,19 @@ except ImportError:
     _SERIAL_AVAILABLE = False
 
 
+def _short_label(class_name: str) -> str:
+    """Drop the threat_/background_ prefix for compact SMS display."""
+    return class_name.split("_", 1)[-1] if "_" in class_name else class_name
+
+
+def _format_top_predictions(top_predictions, sep: str = " > ") -> str:
+    """'gunshot 92% > human 5% > vehicle 2%' for SMS/console."""
+    return sep.join(
+        f"{_short_label(p['class'])} {int(round(p['confidence'] * 100))}%"
+        for p in top_predictions
+    )
+
+
 def _sim808_at(ser, cmd: str, expected: str = "OK", timeout: float = 5.0) -> bool:
     """Send one AT command and wait for expected response."""
     ser.write((cmd + "\r\n").encode())
@@ -118,6 +131,7 @@ class AlertNotifier:
             'threat_type': threat_info['threat_type'],
             'threat_level': threat_info['threat_level'],
             'confidence': threat_info['confidence'],
+            'top_predictions': threat_info.get('top_predictions', []),
             'class_probabilities': threat_info['class_probabilities'],
             
             # Location
@@ -207,6 +221,8 @@ class AlertNotifier:
             print(f"Threat Type:   {alert['threat_type']}")
             print(f"Threat Level:  {alert['threat_level']}")
             print(f"Confidence:    {format_confidence(alert['confidence'])}")
+            if alert.get('top_predictions'):
+                print(f"Top-3:         {_format_top_predictions(alert['top_predictions'])}")
             
             # Location
             lat = alert['latitude']
@@ -256,13 +272,17 @@ class AlertNotifier:
 
         lat  = alert.get("latitude",  "?")
         lon  = alert.get("longitude", "?")
-        conf = int(alert["confidence"] * 100)
         hhmm = datetime.now(timezone.utc).strftime("%H:%M")
         gps_str = f"{lat:.5f},{lon:.5f}" if isinstance(lat, float) else "no fix"
-        sms = (
-            f"ALERTRECK | {alert['threat_type']} | "
-            f"Conf: {conf}% | GPS: {gps_str} | {hhmm}"
-        )
+
+        # Send the top-3 ranked predictions so rangers can gauge certainty and
+        # spot likely false positives. Falls back to the single class if absent.
+        top = alert.get("top_predictions")
+        if top:
+            ranked = _format_top_predictions(top)
+        else:
+            ranked = f"{_short_label(alert['threat_type'])} {int(alert['confidence'] * 100)}%"
+        sms = f"ALERTRECK | {ranked} | GPS: {gps_str} | {hhmm}"
 
         if not _SERIAL_AVAILABLE:
             print(f"GSM: pyserial not installed — would send: {sms}")

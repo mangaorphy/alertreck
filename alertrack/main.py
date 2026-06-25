@@ -31,7 +31,7 @@ from .audio.preprocess import AudioPreprocessor
 from .audio.onset import OnsetDetector
 from .inference.model import ONNXModel
 from .inference.decision import ThreatDecisionEngine
-from .sensors.gps import GPSReader
+from .sensors.gps import SIM808AT
 from .alerts.notifier import AlertNotifier
 from .storage.logger import get_logger
 from .storage.evidence import EvidenceManager
@@ -62,7 +62,7 @@ class ALERTRACKSystem:
         self.onset: Optional[OnsetDetector] = None
         self.model: Optional[ONNXModel] = None
         self.decision_engine: Optional[ThreatDecisionEngine] = None
-        self.gps: Optional[GPSReader] = None
+        self.gps: Optional[SIM808AT] = None
         self.notifier: Optional[AlertNotifier] = None
         self.evidence_manager: Optional[EvidenceManager] = None
 
@@ -103,9 +103,13 @@ class ALERTRACKSystem:
 
             if ENABLE_GPS:
                 try:
-                    self.gps = GPSReader()
-                    self.gps.start()
-                    self.logger.info("GPS started")
+                    # Poll-on-demand GPS: shares the SIM808 UART with SMS, so it must
+                    # NOT hold the port open. It opens/closes only when polled.
+                    self.gps = SIM808AT()
+                    if self.gps.power_on():
+                        self.logger.info("SIM808 GPS powered on (poll-on-demand)")
+                    else:
+                        self.logger.warning("SIM808 GPS power-on unconfirmed — will retry on poll")
                 except Exception as e:
                     self.logger.warning(f"GPS unavailable: {e} — continuing without GPS")
                     self.gps = None
@@ -181,11 +185,9 @@ class ALERTRACKSystem:
             from .utils import generate_alert_id
             alert_id = generate_alert_id()
 
-            # Resolve location once — used by both the event record and the alert
-            location = {}
-            if self.gps and self.gps.has_fix():
-                lat, lon = self.gps.get_coordinates()
-                location = {"latitude": lat, "longitude": lon}
+            # Resolve location with a single GPS poll (one UART open) — used by both
+            # the event record and the alert. Done before SMS so the port is free.
+            location = self.gps.get_location() if self.gps else {}
 
             evidence_path = None
             try:
@@ -247,9 +249,10 @@ class ALERTRACKSystem:
                 self.logger.info(f"Evidence        : {evi_stats.get('total_files', 0)} files  "
                                  f"{evi_stats.get('total_size_mb', 0):.0f} MB")
             if self.gps:
-                coords = self.gps.get_coordinates()
-                if self.gps.has_fix() and coords[0] is not None:
-                    self.logger.info(f"GPS             : {coords[0]:.6f}, {coords[1]:.6f}")
+                loc = self.gps.get_location()   # single poll
+                if loc.get("fix_quality") == 1:
+                    self.logger.info(f"GPS             : {loc['latitude']:.6f}, {loc['longitude']:.6f}  "
+                                     f"({loc.get('satellites', 0)} sats)")
                 else:
                     self.logger.info("GPS             : searching...")
             self.logger.info("=" * 80)

@@ -68,6 +68,28 @@ touch /Volumes/bootfs/ssh
 ```
 Eject, reinsert SD card into Pi, reboot.
 
+**Set up a `ssh alertreck` alias + passwordless login (one-time, recommended):**
+```bash
+# On your Mac — add the alias to ~/.ssh/config
+cat >> ~/.ssh/config <<'EOF'
+
+Host alertreck
+    HostName alertreck.local
+    User alertreck
+    StrictHostKeyChecking accept-new
+EOF
+
+# Copy your key so you never type the password again (asks for it once)
+ssh-copy-id alertreck
+ssh alertreck 'echo connected'    # should print "connected" with no prompt
+```
+> **After a reflash** the Pi gets a new SSH identity. Clear the stale key first or SSH will refuse:
+> `ssh-keygen -R alertreck.local && ssh-keygen -R <old-ip>`, then `ssh-copy-id alertreck` again.
+
+> ⚠️ **Never pull power from a running Pi.** Yanking the cable (e.g. while swapping power supplies)
+> can corrupt the SD card and leave it unbootable — recoverable only by reflashing. Always
+> `sudo shutdown -h now` and wait for the green LED to stop before unplugging.
+
 ---
 
 ## Part 4 — Set Up the Pi Environment
@@ -190,6 +212,16 @@ alsamixer
 #  Esc to exit
 ```
 
+**More reliable: set it directly with `amixer`** (control names are stable; `alsamixer`'s
+simple-control names sometimes don't match). For the common PCM2902 USB mic on card 1:
+```bash
+amixer -c 1 cget numid=4                 # 'Auto Gain Control'  — check state
+amixer -c 1 cset numid=4 off             # AGC OFF (auto-gain drives the mic to clipping)
+amixer -c 1 cset numid=3 4               # 'Mic Capture Volume' low (0–16 scale; ~4 is a good start)
+sudo alsactl store                       # persist across reboots (asks for password)
+```
+Re-check `numid` mapping with `amixer -c 1 contents` if the values above don't match your device.
+
 Verify with a record-and-measure loop — make your loudest test sound during the 3 s:
 ```bash
 arecord -D plughw:1,0 -d 3 -f S16_LE -r 44100 -c1 /tmp/cal.wav
@@ -198,22 +230,39 @@ python3 -c "import wave,numpy as np; w=wave.open('/tmp/cal.wav'); x=np.frombuffe
 **Target: `peak` < ~0.85 on your loudest source.** `peak=1.000` = clipping → lower the gain more.
 Speech is "peaky" — test it from a realistic ~1 m, not pressed against the mic.
 
-### 3. Mains hum (50/60 Hz) is handled in software
+### 3. Mains hum (50/60 Hz) — diagnose, then fix at the RIGHT layer
 Field mics pick up mains hum that the clean training audio never had; left in, it reads as
-`threat_vehicle`. The preprocessor removes it with a high-pass (`HPF_*` in `config.py`, default 90 Hz).
-Confirm the hum is gone after setting the gain:
+`threat_vehicle`. Diagnose it after setting the gain:
 ```bash
 python3 -c "
 import wave, numpy as np
 w=wave.open('/tmp/cal.wav'); sr=w.getframerate()
 x=np.frombuffer(w.readframes(w.getnframes()),dtype=np.int16).astype(np.float32)/32768
 X=np.abs(np.fft.rfft(x*np.hanning(len(x)))); f=np.fft.rfftfreq(len(x),1/sr); tot=X.sum()+1e-9
-print(f'dominant={f[np.argmax(X)]:.1f}Hz  0-120Hz={100*X[f<120].sum()/tot:.1f}%')
+print(f'dominant={f[np.argmax(X)]:.1f}Hz  RMS={np.sqrt((x**2).mean()):.4f}  0-120Hz={100*X[f<120].sum()/tot:.1f}%')
 "
 ```
-A quiet room should **not** be dominated by ~50 Hz. If it still is, raise `HPF_CUTOFF_HZ` to 110 in
-`config.py`. The high-pass only runs at serve time — it removes hum absent from training, so it
-reduces train/serve skew rather than adding it.
+A quiet room should read **`dominant` ≠ ~50 Hz and idle `RMS` < ~0.02**.
+
+**Decide the fix by severity (this is the lesson from the field build):**
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `dominant ≈ 50 Hz`, idle RMS ~0.02–0.05, no clipping | mild hum | **Software** — raise `HPF_CUTOFF_HZ` to 110 in `config.py`. The high-pass runs only at serve time, removing hum absent from training (reduces skew, doesn't add it). |
+| `dominant ≈ 50 Hz`, idle RMS **0.3–0.9**, peak hits 1.0 (**clipping**) | **power-borne hum** — the Pi's USB 5 V rail injects mains hum into a cheap USB sound card | **Hardware — software CANNOT fix a clipped input.** See below. |
+
+**Power-borne hum (the severe case): fix the power path.**
+The 50 Hz comb (peaks at 50/150/250/350 Hz) enters through the Pi's USB power. Confirm by
+running the Pi off a **USB-C power bank** (no mains) — if the hum vanishes, it's mains-borne. Permanent fixes, best first:
+1. **USB isolator** (ADUM3160/ADUM4160) between Pi and mic — **but the mic side must be powered
+   from a source other than the Pi** (a separate clean 5 V / charger fed into the isolator's output
+   side). A bus-powered isolator passes the Pi's noisy 5 V through and does nothing.
+2. **Powered USB hub** with its own wall adapter — mic on the hub, not the Pi.
+3. **Clean / well-grounded Pi PSU** (the official 5 V·3 A supply; avoid cheap ungrounded chargers).
+4. **I2S MEMS mic (INMP441)** wired to GPIO — no USB power path at all; immune to this entirely.
+
+Target after the fix: idle **RMS < 0.02** and no 50 Hz dominance. Only then will onset detection
+and classification work — a real chainsaw/gunshot must rise ~10 dB above the noise floor.
 
 ---
 
@@ -340,10 +389,32 @@ Edit `alertrack/config.py` on the Pi:
 ```python
 GPS_ENABLED = True            # was False
 NOTIFY_GSM  = True            # was False — enables SMS alerts
+SIM808_PORT = "/dev/ttyAMA0"  # 9600 baud
 RANGER_PHONE_NUMBERS = [
-    "+2507XXXXXXXX",          # ranger number(s) in E.164 format
+    "+250795607062",          # ranger number(s) in E.164 format
 ]
 ```
+
+**Validate the GSM link before relying on it** (run on the Pi). Registration first:
+```bash
+python3 -c "
+import serial, time
+s=serial.Serial('/dev/ttyAMA0',9600,timeout=1)
+def at(c): s.reset_input_buffer(); s.write((c+'\r\n').encode()); time.sleep(1); print(c,'->',s.read(s.in_waiting or 256).decode(errors='ignore').strip())
+at('ATE0'); at('AT+CSQ'); at('AT+CREG?'); at('AT+COPS?')
+"
+# Want: CSQ first number >=10 ; CREG: 0,1 or 0,5 (registered) ; COPS shows the carrier
+```
+Then send a real test SMS to the ranger via the project's own sender:
+```bash
+python3 -c "
+from alertrack.alerts.notifier import _sim808_send_sms
+print('SMS sent:', _sim808_send_sms('+250795607062','ALERTRECK test - system online','/dev/ttyAMA0',9600,15.0))
+"
+```
+If `AT` returns nothing, swap the TX/RX wires. If SMS reboots the module, the SIM808 power supply
+is too weak (add a 1000 µF cap across VBAT, or use a stronger external supply).
+
 Restart and watch the logs for a fix:
 ```bash
 sudo systemctl restart alertrack
@@ -351,6 +422,10 @@ journalctl -u alertrack -f
 ```
 When the GPS has a lock, alerts change from `Location: UNKNOWN (GPS unavailable)` to real coordinates,
 and an SMS is sent to each ranger number.
+
+> **GPS/SMS share one UART.** The daemon uses the poll-on-demand `SIM808AT` reader (it opens the port
+> only to read a fix, then releases it) precisely so SMS and GPS never hold `/dev/ttyAMA0` at the same
+> time. Don't switch back to a continuous NMEA reader, or SMS sends will fail with "port busy".
 
 > **Tip:** until the antenna has a clear sky view, set `SIMULATE_GPS = True` in `config.py` to test the
 > alert/SMS flow with placeholder coordinates — useful for indoor bench testing.

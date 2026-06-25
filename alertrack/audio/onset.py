@@ -22,6 +22,28 @@ from ..config import (
     ONSET_RECENT_S, ONSET_FRAME_MS, ONSET_MIN_RMS, DEBUG_MODE,
 )
 
+try:
+    from ..config import ONSET_HPF_HZ
+except ImportError:
+    ONSET_HPF_HZ = 300.0   # default: ignore <300 Hz (mains hum) when measuring energy
+
+
+def _highpass_energy(x: np.ndarray, sr: int, cutoff: float) -> np.ndarray:
+    """Zero-phase FFT high-pass used ONLY for the onset energy measurement.
+
+    Mains hum (50/60 Hz + low harmonics) inflates the raw RMS and pins the onset
+    margin near zero. Measuring energy on a high-passed copy lets real broadband
+    sounds (chainsaw, gunshot, voice) clear the trigger even with residual hum.
+    This does NOT alter the audio sent to the model — only the trigger decision.
+    """
+    if cutoff <= 0 or len(x) < 8:
+        return x
+    n = len(x)
+    X = np.fft.rfft(x)
+    f = np.fft.rfftfreq(n, 1.0 / sr)
+    X[f < cutoff] = 0.0
+    return np.fft.irfft(X, n=n).astype(np.float32)
+
 
 class OnsetDetector:
     """Adaptive energy-onset detector over the recorder's rolling buffer."""
@@ -60,7 +82,10 @@ class OnsetDetector:
         silence floor, and we are past the refractory window.
         """
         recent  = audio[-self.recent_len:]
-        db      = self._frame_db(recent)
+        # Measure energy on a high-passed copy so mains hum doesn't pin the margin.
+        # The full-band `recent` is still used for the absolute silence check below.
+        measure = _highpass_energy(recent, self.sr, ONSET_HPF_HZ)
+        db      = self._frame_db(measure)
         current = float(db.max())     # loudest recent frame = "now"
         quiet   = float(db.min())     # quietest recent frame feeds the floor estimate
 

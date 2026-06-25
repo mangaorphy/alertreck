@@ -394,6 +394,41 @@ class SIM808AT:
         self.port     = port     or SIM808_PORT
         self.baudrate = baudrate or SIM808_BAUDRATE
         self.timeout  = SIM808_TIMEOUT
+        print(f"🌍 SIM808 GPS (poll-on-demand): {self.port} @ {self.baudrate} baud")
+
+    def power_on(self) -> bool:
+        """Power on the SIM808 GPS engine (AT+CGNSPWR=1). Call once at startup."""
+        if not SERIAL_AVAILABLE:
+            return False
+        with serial.Serial(self.port, self.baudrate, timeout=2.0) as ser:
+            ser.write(b"AT+CGNSPWR=1\r\n")
+            time.sleep(0.5)
+            resp = ser.read(ser.in_waiting or 64).decode("ascii", errors="ignore")
+        return "OK" in resp
+
+    def start(self):
+        """No-op — SIM808AT polls on demand, no background thread to start."""
+        pass
+
+    def stop(self):
+        """Power off the GPS engine to save power (AT+CGNSPWR=0)."""
+        if not SERIAL_AVAILABLE:
+            return
+        try:
+            with serial.Serial(self.port, self.baudrate, timeout=2.0) as ser:
+                ser.write(b"AT+CGNSPWR=0\r\n")
+                time.sleep(0.3)
+        except Exception:
+            pass
+
+    def has_fix(self) -> bool:
+        return self.get_location().get("fix_quality", 0) == 1
+
+    def get_coordinates(self) -> Tuple[Optional[float], Optional[float]]:
+        loc = self.get_location()
+        if loc.get("fix_quality") == 1:
+            return loc["latitude"], loc["longitude"]
+        return None, None
 
     def get_location(self) -> Dict:
         """Poll SIM808 for GPS fix via AT+CGNSINF. Returns location dict."""

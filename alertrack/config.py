@@ -11,8 +11,8 @@ from pathlib import Path
 # ============================================================================
 # SYSTEM IDENTIFICATION
 # ============================================================================
-DEVICE_ID = os.getenv("ALERTRACK_DEVICE_ID", "ALERTRACK_001")
-DEVICE_LOCATION = os.getenv("ALERTRACK_LOCATION", "UNKNOWN_RESERVE")
+DEVICE_ID = os.getenv("ALERTRACK_DEVICE_ID", "ALERTRACK_RESERVE_01, RANGER_STATION_A")
+DEVICE_LOCATION = os.getenv("ALERTRACK_LOCATION", "Bumbogo Sector")
 
 # ============================================================================
 # PATHS
@@ -30,10 +30,17 @@ for directory in [DATA_DIR, ALERTS_DIR, EVIDENCE_DIR, LOGS_DIR]:
 # ============================================================================
 # MODEL CONFIGURATION
 # ============================================================================
+# custom_cnn is the deployed model: its softmax confidence is well-calibrated
+# (~0.74 mean top-conf) so the per-class thresholds in THREAT_CONFIG work.
+# protonet has marginally higher test accuracy (93.1% vs 92.6%) but its
+# distance-based logits produce near-uniform softmax (~0.22 max) — incompatible
+# with threshold-based alerting without temperature calibration. Kept selectable
+# for experiments only.
 MODEL_TYPE = os.getenv("ALERTRACK_MODEL", "custom_cnn")
 
 MODEL_PATHS = {
     "custom_cnn": MODEL_DIR / "custom_cnn" / "alertreck_cnn.onnx",
+    "protonet":   MODEL_DIR / "protonet"   / "protonet.onnx",
 }
 
 MODEL_PATH = MODEL_PATHS.get(MODEL_TYPE)
@@ -87,8 +94,13 @@ WIN_LENGTH  = 1102   # 25 ms @ 44.1 kHz
 HOP_STFT    = 441    # 10 ms @ 44.1 kHz
 FMIN        = 0
 FMAX        = SAMPLE_RATE // 2   # 22 050 Hz
+WINDOW      = "hann"
 # Resulting spectrogram shape: 1 + floor(132300 / 441) = 301 frames (librosa center=True)
 INPUT_SHAPE = (1, N_MELS, 301)   # (C, H, W) — channels-first, PyTorch convention
+
+# EBU R128 loudness target — audio is scaled to this RMS before mel extraction.
+# MUST match scripts/audio_preprocessing.py (the models were trained on it).
+EBU_TARGET  = 10 ** (-23.0 / 20.0)   # −23 dBFS ≈ 0.07079
 
 # Silence gate — skip inference if raw RMS is below this level
 # Prevents amplified electronic noise from being classified as a threat.
@@ -117,13 +129,17 @@ STATS_INTERVAL     = 3600    # seconds between statistics log lines
 # Set ONSET_ENABLED = False to fall back to the fixed-interval timer loop.
 ONSET_ENABLED       = True
 ONSET_POLL_INTERVAL = 0.25   # seconds between onset checks (lower = more responsive)
-ONSET_TRIGGER_DB    = 10.0   # dB above the adaptive noise floor required to fire
+ONSET_TRIGGER_DB    = 7.0    # dB above the adaptive noise floor required to fire
 ONSET_REFRACTORY_S  = 2.0    # minimum seconds between triggers (debounce)
 ONSET_SETTLE_S      = 1.0    # wait after onset so the event centres in the 3 s buffer
 ONSET_FLOOR_ALPHA   = 0.10   # adaptive-floor EMA rate per poll (higher = faster tracking)
 ONSET_RECENT_S      = 0.5    # window of "recent" audio used for the current level
 ONSET_FRAME_MS      = 50     # frame size (ms) for energy measurement
 ONSET_MIN_RMS       = 0.01   # absolute floor — below this is silence, never triggers
+# Onset energy is measured on a high-passed copy so mains hum (50/60 Hz) doesn't pin
+# the trigger margin. Does NOT affect the audio sent to the model — only the trigger.
+ONSET_HPF_HZ        = 180.0  # ignore content below this when deciding "did something happen"
+                             # (kills 50 Hz hum but keeps human-voice energy ~180-3400 Hz)
 
 # ============================================================================
 # SIM808 CONFIGURATION  (GSM SMS + GPS — shared UART, no data plan required)
@@ -137,7 +153,7 @@ SIM808_TIMEOUT  = 10.0             # seconds to wait for AT command response
 
 # Ranger phone numbers for SMS alerts (E.164 format)
 RANGER_PHONE_NUMBERS: list[str] = [
-    # "+25078XXXXXXX",   # uncomment and fill in ranger numbers
+    "+250795607062",   # Ranger phone number
 ]
 
 # SMS retry configuration
@@ -149,7 +165,7 @@ SMS_RETRY_DELAY = 5.0   # seconds between retry attempts
 # ============================================================================
 # Enable NMEA output on SIM808: AT+CGNSPWR=1  then  AT+CGNSOUT=1
 # The NMEA sentences ($GPGGA, $GPRMC) are then readable on SIM808_PORT
-GPS_ENABLED  = False   # set True when SIM808 is physically connected
+GPS_ENABLED  = True   # set True when SIM808 is physically connected
 ENABLE_GPS   = GPS_ENABLED    # alias used by main.py
 GPS_PORT     = SIM808_PORT    # SIM808 NMEA output shares UART with AT commands
 GPS_BAUDRATE = SIM808_BAUDRATE
@@ -161,7 +177,7 @@ GPS_TIMEOUT  = 5.0
 ALERT_RETENTION_DAYS = 90
 NOTIFY_CONSOLE   = True
 NOTIFY_LORA      = False
-NOTIFY_GSM       = False
+NOTIFY_GSM       = True
 NOTIFY_SATELLITE = False
 
 # ============================================================================
