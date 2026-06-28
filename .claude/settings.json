@@ -17,7 +17,21 @@
       "Bash(python3 -)",
       "Bash(python3 -c \"import ast; ast.parse\\(open\\('scripts/audio_preprocessing.py'\\).read\\(\\)\\); ast.parse\\(open\\('scripts/grouping.py'\\).read\\(\\)\\); ast.parse\\(open\\('scripts/regenerate_splits.py'\\).read\\(\\)\\); print\\('all parse OK'\\)\")",
       "Bash(python3 scripts/regenerate_splits.py)",
-      "Bash(/opt/anaconda3/bin/python -c ' *)"
+      "Bash(/opt/anaconda3/bin/python -c ' *)",
+      "Bash(/opt/anaconda3/bin/python --version)",
+      "Bash(/opt/anaconda3/bin/python -m venv cqenv)",
+      "Bash(./cqenv/bin/python -m pip install --quiet --upgrade pip)",
+      "Bash(./cqenv/bin/python -m pip install --quiet cadquery)",
+      "Bash(echo \"install exit: $?\")",
+      "Bash(./cqenv/bin/python -c \"import cadquery as cq; print\\('cadquery', cq.__version__\\)\")",
+      "Bash(./cqenv/bin/python -m pip install --only-binary=:all: cadquery)",
+      "Bash(./cqenv/bin/python -c \"import cadquery as cq; print\\('cadquery', cq.__version__, 'OK'\\)\")",
+      "Bash(./cqenv/bin/python alertreck_enclosure.py)",
+      "Bash(./cqenv/bin/python -)",
+      "Bash(mkdir -p cad)",
+      "Bash(cp \"/private/tmp/claude-502/-Users-cococe-Desktop-alertreck/81f32e21-7eee-46bb-8672-ade3fc662ac5/scratchpad/alertreck_enclosure.py\" cad/alertreck_enclosure.py)",
+      "Bash(jupyter nbconvert *)",
+      "Bash(python3 -m py_compile scripts/prepare_w2v2_embeddings.py)"
     ]
   }
 }

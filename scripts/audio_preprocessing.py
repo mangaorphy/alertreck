@@ -4,7 +4,12 @@ Stage 2 — Audio Preprocessing Pipeline (Compound Augmentation + Curriculum)
 Spec (ROADMAP §3.1, Proposal §2.3.7):
   Step 1  Resample → 44.1 kHz mono (Kaiser-best)
   Step 2  Normalise → −23 dBFS EBU R128
-  Step 3  Segment 3 s clips, 1.5 s hop (50 % overlap)
+  Step 3  Segment into 3 s windows — class-dependent (see select_event_windows):
+            • impulsive classes (gunshot, dog): event-based selection — keep only
+              windows centred on an energy onset ≥8 dB above the clip's own floor,
+              dropping silent windows that blind slicing would mislabel as a threat
+            • continuous classes (animals, wind/rain, chainsaw, human, vehicle):
+              blind 3 s windows, 1.5 s hop (50 % overlap)
   Step 4a 128-bin log-mel  (win=1102, hop=441, n_fft=2048, Hann)
   Step 4b MFCC + Δ + ΔΔ  (40 → 120 rows)
   Step 5  DIR calibration (optional --dir-ir WAV)  — sweep-tone IR of deployment USB mic
@@ -24,7 +29,8 @@ Output:
   data/processed/mel/{train,val,test}/shard_NNN.npz
   data/processed/mel/train_aug_{A,B,C}/shard_NNN.npz   (generated per --aug-phase)
   data/processed/mfcc/{same}
-  data/processed/splits.json    (stable file-level 60/20/20, seed 42)
+  data/processed/splits.json    (group-aware 60/20/20 by parent recording, seed 42 —
+                                 segments of one recording never span splits; grouping.py)
   data/processed/manifest.json
 
 Usage:

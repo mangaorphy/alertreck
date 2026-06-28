@@ -47,7 +47,7 @@ These are fixed by the approved proposal (May 2026). Deviations require supervis
 
 | Model | Paradigm | Input | Loss | Key detail |
 |---|---|---|---|---|
-| **CNN** | Supervised | 128-bin log-mel + SpecAugment | Focal loss γ=2 | 4 conv blocks + FC; ~2.1 M params; encoder reused by ProtoNet |
+| **CNN** | Supervised | 128-bin log-mel + SpecAugment | Focal loss γ=2 + tempered (sqrt) class weights | 4 conv blocks + FC; ~1.2 M params; encoder reused by ProtoNet |
 | **ProtoNet (CNN enc)** | Metric learning | 128-bin log-mel + SpecAugment | Prototypical loss + SupCon (λ=0.1) | N=7, K=5 support, Q=15 query per episode; SupCon pulls same-class embeddings across episodes; t-SNE visualisation |
 | **W2V2-L2 + linear head** | Frozen transfer (out-of-species) | 16 kHz raw waveform → frozen wav2vec 2.0 layer-2 embedding (768-dim mean-pooled) | Cross-entropy + focal weighting | wav2vec 2.0 base truncated at layer 2 (~10 % of params); encoder frozen, only a 768→7 linear head trained; no fine-tuning (Geldenhuys & Niesler, 2026) |
 | **Conv-AE** | Unsupervised anomaly | 128-bin log-mel + compound aug | MSE reconstruction | 3-layer encoder → 16×16×128 latent; symmetric decoder |
@@ -57,7 +57,7 @@ These are fixed by the approved proposal (May 2026). Deviations require supervis
 
 ### 1.4 Dataset split
 
-- **60 / 20 / 20** train / val / test, stratified by class, fixed seed `42`
+- **60 / 20 / 20** train / val / test, **group-aware** (assigned by parent recording, stratified by class), fixed seed `42` — segments of one recording never span splits, preventing leakage (`scripts/grouping.py`)
 - Test set is locked before any augmentation is applied to training folds
 - Validation and test sets receive **only base preprocessing** (steps 1–5), not augmentation steps 6a–6e
 
@@ -75,8 +75,8 @@ These are fixed by the approved proposal (May 2026). Deviations require supervis
 
 ### 1.6 Experimental controls (ensures fair comparison across all 5 models)
 
-- Identical preprocessed dataset at 44.1 kHz with 3 s windows, 50 % overlap
-- Identical 60/20/20 stratified split, fixed seed 42
+- Identical preprocessed dataset at 44.1 kHz with 3 s windows (50 % overlap for continuous classes; event-centred for impulsive classes)
+- Identical 60/20/20 group-aware split (by parent recording, class-stratified), fixed seed 42
 - Identical evaluation hardware (Raspberry Pi 4 Model B, 2 GB RAM)
 - Identical nine evaluation techniques applied to all five models across all four paradigms
 - Identical SNR injection conditions (5, 10, and 20 dB) for anomaly injection tests
@@ -86,18 +86,18 @@ These are fixed by the approved proposal (May 2026). Deviations require supervis
 
 ## 2. Dataset sources and provenance
 
-### 2.1 Corpus status (as of 2026-05-27)
+### 2.1 Corpus status (topped up 2026-06-24)
 
-**Total on disk: 8,907 raw clips · Stage 1 complete ●**
+**Total on disk: 11,333 raw clips · Stage 1 complete ●**
 
 | Class | Folder | Target | Current | Status | Sources |
 |---|---|---|---|---|---|
-| `background_animals` | `dataset/background_animals/` | ≥ 600 | 2,140 | **met ✓** | ESC-50 + DATASET02 animals & birds + ff1010bird |
-| `background_wind_rain` | `dataset/background_wind_rain/` | ≥ 600 | 680 | **met ✓** | ESC-50 + DATASET02 rainfall & wind |
-| `threat_gunshot` | `dataset/threat_gunshot/` | ≥ 300 | 2,400 | **met ✓** | AudioSet extraction |
-| `threat_chainsaw` | `dataset/threat_chainsaw/` | ≥ 500 | 567 | **met ✓** | ESC-50 + AudioSet (complete) |
+| `background_animals` | `dataset/background_animals/` | ≥ 600 | 2,139 | **met ✓** | ESC-50 + DATASET02 animals & birds + ff1010bird |
+| `background_wind_rain` | `dataset/background_wind_rain/` | ≥ 600 | 2,000 | **met ✓** | ESC-50 + DATASET02 rainfall & wind + AudioSet |
+| `threat_gunshot` | `dataset/threat_gunshot/` | ≥ 300 | 3,304 | **met ✓** | AudioSet extraction |
+| `threat_chainsaw` | `dataset/threat_chainsaw/` | ≥ 500 | 568 | **met ✓** | ESC-50 + AudioSet (complete) |
 | `threat_vehicle` | `dataset/threat_vehicle/` | ≥ 200 | 1,040 | **met ✓** | ESC-50 + UrbanSound8K |
-| `threat_human` | `dataset/threat_human/` | ≥ 200 | 1,040 | **met ✓** | Common Voice + ESC-50 |
+| `threat_human` | `dataset/threat_human/` | ≥ 200 | 1,242 | **met ✓** | Common Voice + ESC-50 |
 | `threat_dog` | `dataset/threat_dog/` | ≥ 200 | 1,040 | **met ✓** | UrbanSound8K + ESC-50 |
 
 All class targets met. Dataset is locked for training.
@@ -163,7 +163,7 @@ Applied to **all clips** in order. Steps 6a–6e apply to **training folds only*
 |---|---|---|---|
 | 1 | **Resample** | Kaiser-best resampling → 44.1 kHz mono | Full chainsaw/vehicle harmonic content up to 22.05 kHz; matches USB microphone native rate |
 | 2 | **Normalise** | RMS amplitude → −23 dBFS (EBU R128) | Removes gain variation across sources; prevents loudness shortcuts |
-| 3 | **Segment** | Sliding window: 3 s, step 1.5 s (50 % overlap) | Ensures full gunshot transient captured regardless of onset position |
+| 3 | **Segment** | Class-dependent 3 s windows: continuous classes use a sliding window (1.5 s step, 50 % overlap); impulsive classes (gunshot, dog) use **event-based selection** — windows centred on energy onsets ≥ 8 dB above the clip's own floor | Captures the transient regardless of onset position; for impulsive classes, drops silent windows that blind slicing would mislabel as a threat (reduces false positives) |
 | 4a | **Log-mel spectrogram** | STFT → 128-bin mel filterbank → log; 25 ms window, 10 ms hop, Hann | Input for CNN, ProtoNet, Conv-AE |
 | 4b | **Raw waveform (16 kHz)** | 3 s mono waveform resampled 44.1 → 16 kHz | Native input for the frozen wav2vec 2.0 layer-2 encoder (W2V2-L2 arm); matches wav2vec 2.0 pretraining sample rate (Geldenhuys & Niesler, 2026) |
 | 4c | **MFCC+Δ+ΔΔ** | DCT → delta → delta-delta; 40 coefficients → 120-dim vector per frame | Input for OC-SVM; RBF kernel tractable at this dimensionality |
@@ -173,7 +173,7 @@ Applied to **all clips** in order. Steps 6a–6e apply to **training folds only*
 | 6c | **FilterAugment** | Random frequency response curve per clip; magnitude: ±6 dB across random sub-band | Simulates USB microphone frequency response variation across outdoor temperature/humidity (Nam et al., 2022) |
 | 6d | **Mixup** | Beta distribution β(0.4); inter-class and intra-class pairs | Additional regularisation; improves class boundary generalisation (Zhang et al., 2018) |
 | 6e | **Learnability filter** | Discard augmented clips where Conv-AE reconstruction error exceeds 95th percentile of background distribution | Removes unlearnable hard-negative samples that destabilise training (Mega-ASR WER > 70 % filter principle) |
-| 7 | **Split** | Stratified 60/20/20; seed 42; test set locked before augmentation applied to training folds | Held-out test set reflects clean baseline; augmentation only in training folds |
+| 7 | **Split** | Group-aware 60/20/20 (by parent recording, class-stratified); seed 42; test set locked before augmentation applied to training folds | Held-out test set reflects clean baseline; group-aware assignment prevents recording leakage across splits |
 
 ### 3.2 Compound augmentation effect pool (step 6b)
 
@@ -254,15 +254,15 @@ Ten stages across eight proposal phases. Each stage maps to a proposal section a
 
 ### Stage 1 — Data engineering ● done
 
-**Goal:** Assemble, organise, and document 8,907 raw audio clips across all 7 classes.
+**Goal:** Assemble, organise, and document 11,333 raw audio clips across all 7 classes (8,907 at Stage-1 close 2026-05-27; topped up to 11,333 on 2026-06-24).
 **Proposal ref:** §3.3 (Table 2)
 **Tasks:**
-1. ● `threat_chainsaw` at 567 clips — above 500 target (completed 2026-05-27)
-2. ● Data manifest generated — 8,907 files across 7 classes
+1. ● `threat_chainsaw` at 568 clips — above 500 target (completed 2026-05-27)
+2. ● Data manifest generated — 11,333 files across 7 classes
 3. ● Classes mapped to 7-class taxonomy
 4. ● ff1010bird merged into `background_animals/` with `ff1010bird__` prefix
 
-**Artefact:** `dataset/` directory with 8,907 labelled clips across 7 class folders
+**Artefact:** `dataset/` directory with 11,333 labelled clips across 7 class folders
 **Status:** ● complete
 
 ---
@@ -277,28 +277,28 @@ Ten stages across eight proposal phases. Each stage maps to a proposal section a
 1. ● Rewrote [scripts/audio_preprocessing.py](scripts/audio_preprocessing.py) — full 7-step pipeline:
    - Step 1: Kaiser-best resample → 44.1 kHz mono
    - Step 2: RMS normalise → −23 dBFS (EBU R128)
-   - Step 3: Sliding window, 3 s, 1.5 s step → 132,300 samples per clip
+   - Step 3: Class-dependent 3 s windows (132,300 samples) — sliding 1.5 s step for continuous classes; event-centred selection for impulsive classes (gunshot, dog)
    - Step 4a: 128-bin log-mel (STFT win=1102/25 ms, hop=441/10 ms, Hann, n_fft=2048) → (128, 300) shape
    - Step 4b: 16 kHz raw-waveform branch for the W2V2-L2 frozen encoder — **new requirement from the updated proposal (2026-06-01); not yet emitted, pipeline extension + re-run pending**
    - Step 4c: MFCC+Δ+ΔΔ (40 coefficients → 120-dim per frame)
    - Step 5: DIR calibration stub (active with `--dir-ir usb_mic_ir.wav`)
    - Steps 6a–6e: SpecAugment, compound aug pool, FilterAugment, mixup utility, learnability filter stub
-   - Step 7: 60/20/20 stratified split, seed 42; test set locked
+   - Step 7: 60/20/20 group-aware split (by parent recording, class-stratified), seed 42; test set locked
 2. ◐ USB mic DIR calibration (Step 5) — hardware in place at alertreck.local; hum issue being resolved before final re-run with `--dir-ir`
 3. ● All augmentation steps 6a–6d implemented from scratch (numpy + librosa + ffmpeg); 6e stub until Conv-AE trained
 4. ● `.npz` shards written to `data/processed/{mel,mfcc}/{train,val,test,train_aug_A,train_aug_B,train_aug_C}/`
 5. ● `data/processed/manifest.json` and `splits.json` written
 
-**Preprocessed output (2026-05-27):**
+**Preprocessed output (group-aware re-shard 2026-06-24):**
 
 | Split | Files | Windows |
 |---|---|---|
-| `mel/train` (clean) | 5,343 | 7,359 |
-| `mel/train_aug_A` (Phase A ×1) | 5,343 | 7,359 |
-| `mel/train_aug_B` (Phase B ×2) | 5,343 | 14,718 |
-| `mel/train_aug_C` (Phase C ×3) | 5,343 | 22,077 |
-| `mel/val` | 1,782 | 2,394 |
-| `mel/test` | 1,782 | 2,471 |
+| `mel/train` (clean) | 6,799 | 14,854 |
+| `mel/train_aug_A` (Phase A ×1) | 6,799 | 14,854 |
+| `mel/train_aug_B` (Phase B ×2) | 6,799 | 29,708 |
+| `mel/train_aug_C` (Phase C ×3) | 6,799 | 44,562 |
+| `mel/val` | 2,268 | 5,844 |
+| `mel/test` | 2,266 | 5,925 |
 | `mfcc/{same splits}` | — | same counts |
 
 **Artefact:** [scripts/audio_preprocessing.py](scripts/audio_preprocessing.py) · `data/processed/` shards · `manifest.json` · `splits.json`
@@ -551,6 +551,10 @@ Legend: ○ not started · ◐ partial / skeleton exists · ● done
 | 2026-06-01 | **tiny-AST dropped; replaced by W2V2-L2** (frozen wav2vec 2.0 layer-2 + linear head) | Updated proposal §2.3.4, §3.5.1: fine-tuning a transformer on a small corpus overfits under domain shift. A frozen, truncated layer-2 embedding is a genuinely distinct 4th paradigm (frozen out-of-species transfer) and the empirical vehicle for the new RQ5 (Geldenhuys & Niesler, 2026). `notebooks/03b-train-tiny-ast.ipynb` and `models/tiny_ast/` are superseded |
 | 2026-06-01 | Study is now a **four-paradigm** comparison (was three) | Supervised (CNN) · metric (ProtoNet) · frozen transfer (W2V2-L2) · unsupervised anomaly (Conv-AE / OC-SVM); RQ5 added |
 | 2026-06-01 | Preprocessing gains a **16 kHz raw-waveform branch (step 4b)** | wav2vec 2.0 was pretrained at 16 kHz; W2V2-L2 needs native-rate waveform input. MFCC branch renumbered 4b → 4c; Stage 2 reopened to emit waveform shards |
+| 2026-06-23 | **Event-based window selection** added for impulsive classes (gunshot, dog) | Blind slicing labelled silent windows of long clips as a threat; event-centred windows (energy onset ≥ 8 dB above clip floor) drop them, reducing weak-label noise and false positives (`select_event_windows`, mirrors `alertrack/audio/onset.py`) |
+| 2026-06-24 | Dataset topped up to **11,333 clips** | AudioSet top-up for wind/rain (→ 2,000) and gunshot (→ 3,304); human → 1,242 |
+| 2026-06-25 | **Split leakage found and fixed — switched to group-aware split** | File-level split scattered 568 parent recordings across train/test, inflating `threat_gunshot` F1 to 0.999. New group-aware split (`scripts/grouping.py`, `scripts/regenerate_splits.py`) keeps each recording in one split: 0 leaks. Pre-fix model scores are invalid; full re-shard + retrain required. Honest scores are lower but generalise better on-device |
+| 2026-06-26 | CNN class weights tempered (raw inverse-freq → sqrt) | Raw inverse-frequency (6.6× spread) stacked on focal-γ over-weighted rare classes; the model over-predicted dog/vehicle (high recall, low precision). sqrt weighting (~2.6× spread) rebalances precision/recall |
 
 ---
 

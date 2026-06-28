@@ -3,9 +3,16 @@ Stage 2b — W2V2-L2 Embedding Extraction
 ========================================
 Reads the stable file-level splits from data/processed/splits.json, loads each
 audio clip, resamples to 16 kHz mono, optionally applies compound augmentation,
-runs batches through the frozen wav2vec 2.0 base encoder, taps hidden states
-after transformer layer 2, mean-pools over the time axis to produce a 768-dim
-embedding per window, and saves as .npz shards.
+runs batches through the frozen, layer-2-TRUNCATED wav2vec 2.0 base encoder,
+taps hidden states after transformer layer 2, mean-pools over the time axis to
+produce a 768-dim embedding per window, and saves as .npz shards.
+
+The encoder is physically truncated to its first 2 transformer layers
+(Geldenhuys & Niesler, 2026): the upper 10 layers are deleted, so the forward
+pass stops at the tap point. Embeddings are identical to reading layer 2 of the
+full network, but at a fraction of the parameters / compute — the on-device
+motivation for the frozen-transfer (W2V2-L2) arm. The truncated param count is
+printed at load time.
 
 The encoder is run ONCE per window and the result stored — training the linear
 head in notebook 04a never touches the encoder again, so GPU is only needed
@@ -275,13 +282,26 @@ def load_encoder(device: torch.device):
     print(f"Loading {W2V2_HUB} …")
     feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(W2V2_HUB)
     model = Wav2Vec2Model.from_pretrained(W2V2_HUB)
+
+    full_params = sum(p.numel() for p in model.parameters())
+
+    # ── Truncation (Geldenhuys & Niesler, 2026) ──────────────────────────────
+    # We only ever tap hidden_states[W2V2_LAYER], so the transformer layers above
+    # it are dead weight. Physically drop them: the forward pass then stops at
+    # layer W2V2_LAYER, giving identical embeddings at a fraction of the params /
+    # compute — this is the "~10% of the network, well suited to on-device" claim
+    # that motivates the frozen-transfer arm.
+    model.encoder.layers = model.encoder.layers[:W2V2_LAYER]
+
     model.eval()
     for p in model.parameters():
         p.requires_grad_(False)
     model = model.to(device)
 
     n_params = sum(p.numel() for p in model.parameters())
-    print(f"  Parameters   : {n_params:,}")
+    print(f"  Full encoder : {full_params:,} params  (12 transformer layers)")
+    print(f"  Truncated    : {n_params:,} params  (layers 1–{W2V2_LAYER} kept)  "
+          f"= {100 * n_params / full_params:.1f}% of full network")
     print(f"  Device       : {device}")
     print(f"  Tapping      : hidden_states[{W2V2_LAYER}]  (after transformer layer {W2V2_LAYER})")
     print(f"  Output dim   : {EMBED_DIM}\n")

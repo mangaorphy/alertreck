@@ -13,19 +13,20 @@
 ## Overview
 
 This pipeline converts raw audio in `dataset/` into machine-learning-ready feature shards. It is the
-bridge between raw audio collection (Stage 1) and model training (Stage 3+). The defining feature is a
-**three-phase augmentation curriculum (A → B → C)** of increasing difficulty, each written to its own
-output path so training can ramp difficulty across phases.
+bridge between raw audio collection (Stage 1) and model training (Stage 3+). Two design choices define
+it: a **group-aware split** that prevents recording leakage, and a **three-phase augmentation
+curriculum (A → B → C)** of increasing difficulty, each written to its own output path so training can
+ramp difficulty across phases.
 
 ```
-dataset/  (8,907 files)
+dataset/  (11,333 files)
         │
         ▼  audio_preprocessing.py
         │
-   ┌────┴───────────────────────────────────────────────┐
-   │ load_mono → EBU R128 normalise → 3 s windowing      │
-   │ → FILE-LEVEL 60/20/20 split (splits.json, seed 42)  │
-   └────┬───────────────────────────────────────────────┘
+   ┌────┴────────────────────────────────────────────────────┐
+   │ GROUP-AWARE 60/20/20 split (splits.json, seed 42)        │
+   │ load_mono → EBU R128 normalise → class-dependent windows │
+   └────┬────────────────────────────────────────────────────┘
         │
    ┌────┴─────────────┬──────────────────────────────────┐
    ▼                  ▼                                   ▼
@@ -70,37 +71,59 @@ These match `manifest.json` exactly, and the edge preprocessor in
 
 | Folder | Label | Kind | Files |
 |---|---|---|---|
-| `background_animals` | 0 | Background | 2,140 |
-| `background_wind_rain` | 1 | Background | 680 |
-| `threat_chainsaw` | 2 | Threat | 567 |
+| `background_animals` | 0 | Background | 2,139 |
+| `background_wind_rain` | 1 | Background | 2,000 |
+| `threat_chainsaw` | 2 | Threat | 568 |
 | `threat_dog` | 3 | Threat context | 1,040 |
-| `threat_gunshot` | 4 | Threat | 2,400 |
-| `threat_human` | 5 | Threat | 1,040 |
+| `threat_gunshot` | 4 | Threat | 3,304 |
+| `threat_human` | 5 | Threat | 1,242 |
 | `threat_vehicle` | 6 | Threat | 1,040 |
 
-> At inference, labels 2–6 trigger an alert; labels 0–1 do not.
+Total: **11,333 files**. At inference, labels 2–6 trigger an alert; labels 0–1 do not.
 
 ---
 
 ## Pipeline Steps
 
 ### Step 1 — Load Audio (`load_mono`)
-- Decodes any format (MP3/WAV/FLAC/OGG) via an `ffmpeg` subprocess to 16/44.1 kHz mono float32 — this
-  avoids the `resampy`/`soundfile` failure modes that silently drop non-MP3 files.
-- Stereo → mono by channel averaging; resampled to 44,100 Hz.
+- Decodes any format (MP3/WAV/FLAC/OGG/M4A): MP3 via an `ffmpeg` subprocess, others via `soundfile`,
+  then resampled with librosa `kaiser_best` — this avoids the `resampy` failure modes that silently
+  drop files.
+- Stereo → mono by channel averaging; resampled to **44,100 Hz** mono float32.
 
 ### Step 2 — EBU R128 Loudness Normalisation (`ebu_r128_normalize`)
 - Scales each clip to **−23 dBFS** (target RMS ≈ 0.0708) and clips to [−1, 1].
 - Makes the model invariant to recording volume / mic distance.
 
-### Step 3 — Windowing
-- Each file is sliced into 3 s windows with 50 % overlap (hop 1.5 s). Files < 3 s are zero-padded to one
-  window. A 10 s file → 6 windows.
+### Step 3 — Windowing (class-dependent)
+The 3 s windowing strategy depends on the class, because impulsive and continuous sounds have different
+weak-label risks:
 
-### Step 4 — File-Level 60/20/20 Split (`splits.json`)
-- The split is **stratified by class at the file level**, not the window level. All windows from one file
-  stay in the same split — this prevents leakage (a model seeing window 1 in train and window 2 in test).
-- Stable across runs (seed 42), persisted to `data/processed/splits.json`.
+- **Impulsive classes — `threat_gunshot`, `threat_dog`** → **event-based selection**
+  (`select_event_windows`). A gunshot is a ~200 ms spike inside a long clip; blind slicing would label
+  seconds of silence as "gunshot." Instead: high-pass at 180 Hz (ignore hum/rumble), measure energy in
+  50 ms frames, take the clip's **background floor = 20th percentile**, mark frames **≥ 8 dB above
+  floor** as events, merge onsets within 1 s, and emit one 3 s window **centred on each event**.
+  Fallback: the single loudest window, so no clip is ever lost.
+- **Continuous classes — animals, wind/rain, chainsaw, human, vehicle** → blind 3 s windows, 1.5 s hop
+  (50 % overlap), zero-padded if < 3 s. The sound fills the clip, so every window is genuinely that
+  class.
+
+This mirrors the edge onset logic in [`alertrack/audio/onset.py`](alertrack/audio/onset.py) and directly
+reduces false positives by removing mislabelled silent windows.
+
+### Step 4 — Group-Aware 60/20/20 Split (`splits.json`)
+- The split is **stratified by class** and assigned by **parent recording**, not by file
+  (`scripts/grouping.py`). Many clips are segments of one recording (e.g. `gunshots122_00013_1` and
+  `gunshots122_00009_1`; UrbanSound8K slices sharing a Freesound ID; `ds02 …_part_N` chunks).
+  `group_key()` maps each file to its source recording, and `group_aware_split()` keeps **every group
+  entirely within one split**.
+- **Why it matters:** an earlier file-level split leaked recordings across train/test, inflating
+  `threat_gunshot` F1 to 0.999. The group-aware split removed it — the honest test scores are lower but
+  reflect true field generalisation (confirmed on-device).
+- Stable across runs (seed 42), persisted to `data/processed/splits.json`. Regenerate independently with
+  [`scripts/regenerate_splits.py`](scripts/regenerate_splits.py), which prints a before/after leakage
+  report.
 
 ### Step 4b — Feature Extraction (per window)
 | Feature | Shape | Contents | Used by |
@@ -117,7 +140,7 @@ Applied only when `--aug-phase` is passed. Val/test are **never** augmented.
 | Step | What |
 |---|---|
 | 5 — DIR calibration (optional) | Convolve with a USB-mic sweep-tone impulse response (`--dir-ir`) to match deployment mic colour |
-| 6a — SpecAugment (mel) | 2 time masks (≤40 frames) + 2 freq masks (≤20 bins) |
+| 6a — SpecAugment (mel) | 2 time masks (≤40 frames) + 2 freq masks (≤20 bins) — also applied to clean train |
 | 6b — Compound effect pool | `noise │ rir │ lowpass │ mp3 │ gain │ clip` (rir ⊕ clip are mutually exclusive) |
 | 6c — FilterAugment | ±6 dB smooth random frequency curve over mel bins |
 | 6d — mixup | Applied in the DataLoader at train time, not written to disk |
@@ -131,16 +154,16 @@ copies per clean window**, to its own output directory. Training ramps through t
 
 | Phase | Effects/clip | Severity | Noise SNR | Copies / window | Output path | Windows | Shards |
 |---|---|---|---|---|---|---|---|
-| **A** | 1–2 | 0.3 | ≥ 15 dB | ×1 | `…/train_aug_A/` | 10,223 | 11 |
-| **B** | 2–4 | 0.5 | 10–15 dB | ×2 | `…/train_aug_B/` | 20,446 | 21 |
-| **C** | 2–5 | 1.0 | 5–10 dB | ×3 | `…/train_aug_C/` | 30,669 | 31 |
+| **A** | 1–2 | 0.3 | 15–30 dB | ×1 | `…/train_aug_A/` | 14,854 | 15 |
+| **B** | 2–4 | 0.5 | 10–15 dB | ×2 | `…/train_aug_B/` | 29,708 | 30 |
+| **C** | 2–5 | 1.0 | 5–10 dB | ×3 | `…/train_aug_C/` | 44,562 | 45 |
 
 During training, each phase concatenates the **clean** train set with that phase's augmented set:
 
 ```
-Phase A loader = train (clean)  +  train_aug_A     ( 10,223 + 10,223 )
-Phase B loader = train (clean)  +  train_aug_B     ( 10,223 + 20,446 )
-Phase C loader = train (clean)  +  train_aug_C     ( 10,223 + 30,669 )
+Phase A loader = train (clean)  +  train_aug_A     ( 14,854 + 14,854 )
+Phase B loader = train (clean)  +  train_aug_B     ( 14,854 + 29,708 )
+Phase C loader = train (clean)  +  train_aug_C     ( 14,854 + 44,562 )
 ```
 
 So the model starts on mild conditions (Phase A: high SNR, few effects) and finishes on the hardest
@@ -152,15 +175,28 @@ So the model starts on mild conditions (Phase A: high SNR, few effects) and fini
 
 | Split | Clean windows | Shards |
 |---|---|---|
-| Train (clean) | 10,223 | 11 |
-| Train aug A | 10,223 | 11 |
-| Train aug B | 20,446 | 21 |
-| Train aug C | 30,669 | 31 |
-| Val | 3,392 | 4 |
-| Test | 3,439 | 4 |
+| Train (clean) | 14,854 | 15 |
+| Train aug A | 14,854 | 15 |
+| Train aug B | 29,708 | 30 |
+| Train aug C | 44,562 | 45 |
+| Val | 5,844 | 6 |
+| Test | 5,925 | 6 |
 
-Total clean windows: **17,054** (10,223 train + 3,392 val + 3,439 test).
-Shards are written in compressed `.npz` batches of 1,000 samples.
+Total clean windows: **26,623** (14,854 train + 5,844 val + 5,925 test).
+Shards are written in compressed `.npz` batches of 1,000 samples. The shard writer **purges stale shards
+from any previous run** before writing, so a shorter run can never leave orphaned shards behind.
+
+Per-class file split (60/20/20, group-aware):
+
+| Class | Train | Val | Test |
+|---|---|---|---|
+| background_animals | 1,283 | 428 | 428 |
+| background_wind_rain | 1,200 | 400 | 400 |
+| threat_chainsaw | 341 | 114 | 113 |
+| threat_dog | 624 | 208 | 208 |
+| threat_gunshot | 1,982 | 661 | 661 |
+| threat_human | 745 | 249 | 248 |
+| threat_vehicle | 624 | 208 | 208 |
 
 ```python
 shard_000.npz
@@ -176,15 +212,15 @@ shard_000.npz
 ```
 data/processed/
   mel/
-    train/         11 shards   (10,223 windows)
-    train_aug_A/   11 shards   (10,223)
-    train_aug_B/   21 shards   (20,446)
-    train_aug_C/   31 shards   (30,669)
-    val/            4 shards   ( 3,392)
-    test/           4 shards   ( 3,439)
+    train/         15 shards   (14,854 windows)
+    train_aug_A/   15 shards   (14,854)
+    train_aug_B/   30 shards   (29,708)
+    train_aug_C/   45 shards   (44,562)
+    val/            6 shards   ( 5,844)
+    test/           6 shards   ( 5,925)
   mfcc/
     train/ train_aug_A/ train_aug_B/ train_aug_C/ val/ test/   (same shape, (120, 301))
-  splits.json        # stable file-level 60/20/20 assignment (seed 42)
+  splits.json        # group-aware 60/20/20 assignment by parent recording (seed 42)
   manifest.json      # all run parameters + script SHA256
 ```
 
@@ -209,11 +245,11 @@ data/processed/
   "curriculum_phases": ["A", "B", "C"],
   "dir_calibration_ir": null,
   "splits": {
-    "train": { "clean": 10223, "aug_A": 10223, "aug_B": 20446, "aug_C": 30669 },
-    "val":   { "clean": 3392 },
-    "test":  { "clean": 3439 }
+    "train": { "clean": 14854, "aug_A": 14854, "aug_B": 29708, "aug_C": 44562 },
+    "val":   { "clean": 5844 },
+    "test":  { "clean": 5925 }
   },
-  "script_sha256": "9922489ab8ebef71948d6bd9bc9788f93740b6fcf552b3338cdf5182fcab18de"
+  "script_sha256": "9cd01d8a5bc32add02866989aa649f8429057b6e812bfa7349b1c61b038449d1"
 }
 ```
 
@@ -225,6 +261,9 @@ processed data may differ).
 ## How to Re-run
 
 ```bash
+# (Optional) regenerate the group-aware split + leakage report, without re-sharding
+/opt/anaconda3/bin/python scripts/regenerate_splits.py
+
 # Clean splits only (no augmentation) — fast, for debugging
 /opt/anaconda3/bin/python scripts/audio_preprocessing.py
 
@@ -241,15 +280,18 @@ processed data may differ).
 /opt/anaconda3/bin/python scripts/audio_preprocessing.py --aug-phase A B C --shard-size 500
 ```
 
-> Re-running overwrites existing shards in `data/processed/`. After regenerating, re-upload the Kaggle
-> datasets (`alertreck-mel2`, `alertreck-mfcc`) before retraining.
+> Re-running overwrites existing shards in `data/processed/` (the writer purges each directory first).
+> After regenerating, re-upload the Kaggle datasets (mel + mfcc + splits.json) before retraining.
 
 ---
 
 ## Notes
 
-- **File-level split** (not window-level) is deliberate — it is the difference between an honest test
-  set and silent leakage between near-identical overlapping windows.
+- **Group-aware split** (not file- or window-level) is deliberate — segments of the same parent
+  recording never span splits, which is the difference between an honest test set and silent leakage
+  that inflated `threat_gunshot` F1 to 0.999.
+- **Event-based windowing** for impulsive classes removes silent windows that blind slicing would
+  mislabel as a threat — a direct false-positive reduction.
 - **EBU R128, not RMS-to-0.1** — the edge preprocessor matches this exactly. Any deviation (window
   length, normalisation, or an extra filter) is train/serve skew and degrades live accuracy.
 - The deployment path adds **one** deliberate, training-absent step: a 50/60 Hz mains-hum high-pass to
