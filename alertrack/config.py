@@ -80,10 +80,17 @@ BUFFER_SIZE   = int(SAMPLE_RATE * CLIP_SECONDS)   # 132 300 samples
 CHANNELS      = 1        # mono
 CHUNK_SIZE    = 1024     # samples per sounddevice read
 
-# USB microphone device index — find yours with:
-#   python3 -c "import sounddevice; print(sounddevice.query_devices())"
-# Set to None to use system default (not recommended on Pi)
-MIC_DEVICE_INDEX = 1  # e.g. set to 5 after running query_devices()
+# ── Microphone device ─────────────────────────────────────────────────────────
+# INMP441 I2S MEMS mic (replaces the old USB mic). It is NOT a USB audio device —
+# it uses the Pi's I2S peripheral. After running deploy/INMP441_SETUP.md (enable
+# I2S + googlevoicehat overlay + install deploy/asound.conf), the mic becomes the
+# ALSA *default*, which resamples 48 kHz→44.1 kHz and downmixes to mono, so the
+# 44.1 kHz model pipeline below is unchanged.
+#
+#   None  → ALSA default  (= the I2S mic, via deploy/asound.conf)   ← recommended
+#   int   → explicit PortAudio index (python3 -c "import sounddevice; print(sounddevice.query_devices())")
+#   str   → device name substring, e.g. "googlevoicehat" or "default"
+MIC_DEVICE_INDEX = None
 
 # ============================================================================
 # PREPROCESSING CONFIGURATION  (must match scripts/audio_preprocessing.py)

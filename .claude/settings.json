@@ -31,7 +31,16 @@
       "Bash(mkdir -p cad)",
       "Bash(cp \"/private/tmp/claude-502/-Users-cococe-Desktop-alertreck/81f32e21-7eee-46bb-8672-ade3fc662ac5/scratchpad/alertreck_enclosure.py\" cad/alertreck_enclosure.py)",
       "Bash(jupyter nbconvert *)",
-      "Bash(python3 -m py_compile scripts/prepare_w2v2_embeddings.py)"
+      "Bash(python3 -m py_compile scripts/prepare_w2v2_embeddings.py)",
+      "Bash(/Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12 alertreck_field_enclosure.py)",
+      "Bash(/Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12 alertreck_pro_enclosure.py)",
+      "Bash(/Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12 -)",
+      "Bash(python3 -m py_compile alertrack/config.py alertrack/deploy/test_i2s_mic.py)",
+      "Bash(ssh -o ConnectTimeout=8 -o BatchMode=yes alertreck@alertreck.local 'echo OK; arecord -l 2>&1 | head -20')",
+      "Bash(ssh -o ConnectTimeout=8 alertreck@alertreck.local 'arecord -D plughw:CARD=sndrpigooglevoi,DEV=0 -f S16_LE -r 44100 -c 1 -d 6 /tmp/alertreck_mic.wav 2>&1 | tail -3; ls -la /tmp/alertreck_mic.wav')",
+      "Bash(scp -o ConnectTimeout=8 alertreck@alertreck.local:/tmp/alertreck_mic.wav /Users/cococe/Desktop/alertreck/pi_mic_test.wav)",
+      "Bash(ssh -o ConnectTimeout=8 alertreck@alertreck.local 'arecord -D plughw:CARD=sndrpigooglevoi,DEV=0 -f S16_LE -r 44100 -c 1 -d 6 /tmp/alertreck_mic2.wav 2>&1 | tail -2')",
+      "Bash(scp -o ConnectTimeout=8 alertreck@alertreck.local:/tmp/alertreck_mic2.wav /Users/cococe/Desktop/alertreck/pi_mic_test2.wav)"
     ]
   }
 }

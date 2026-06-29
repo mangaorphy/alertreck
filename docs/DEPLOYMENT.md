@@ -230,6 +230,14 @@ python3 -c "import wave,numpy as np; w=wave.open('/tmp/cal.wav'); x=np.frombuffe
 **Target: `peak` < ~0.85 on your loudest source.** `peak=1.000` = clipping → lower the gain more.
 Speech is "peaky" — test it from a realistic ~1 m, not pressed against the mic.
 
+### Rcord an Audio Sample from the MiC:
+```bash
+ssh -o ConnectTimeout=8 alertreck@alertreck.local \
+  'arecord -D plughw:CARD=sndrpigooglevoi,DEV=0 -f S16_LE -r 44100 -c 1 -d 6 /tmp/alertreck_mic2.wav 2>&1 | tail -2' \
+&& scp -o ConnectTimeout=8 alertreck@alertreck.local:/tmp/alertreck_mic2.wav /Users/cococe/Desktop/alertreck/pi_mic_test2.wav 2>&1 | tail -1
+ls -la /Users/cococe/Desktop/alertreck/pi_mic_test2.wav
+```
+
 ### 3. Mains hum (50/60 Hz) — diagnose, then fix at the RIGHT layer
 Field mics pick up mains hum that the clean training audio never had; left in, it reads as
 `threat_vehicle`. Diagnose it after setting the gain:
