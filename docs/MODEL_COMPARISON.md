@@ -1,35 +1,43 @@
 # Model Comparison & Analysis
 
 Comparative evaluation of the Alertreck models across four machine-learning paradigms.
-All models share the same 7-class dataset, the same 60/20/20 file-level split (seed 42),
+All models share the same 7-class dataset, the same **group-aware** 60/20/20 split (seed 42, split by
+parent recording so no recording appears in two splits — see [AUDIO_PREPROCESSING.md](AUDIO_PREPROCESSING.md)),
 and the same three-phase augmentation curriculum (A → B → C).
 
-> **Status:** All 5 models trained.
+> **Status:** All 5 models trained and evaluated on the held-out test set.
 >
-> 📦 Trained checkpoints, ONNX exports, and `results.json` for every model are on Google Drive:
+> Trained checkpoints, ONNX exports, and `results.json` for every model are on Google Drive:
 > [Alertreck Data, Dataset & Models](https://drive.google.com/drive/folders/1U9BwIUNQ8Snl5RxR8LHthWfdOc_EdcTM?usp=sharing).
 > The numbers below are read directly from those `results.json` files; regenerate every chart with
 > [`notebooks/00-model-report.ipynb`](../notebooks/00-model-report.ipynb).
+>
+> ⚠️ **These are the leak-free numbers.** An earlier file-level split let windows from the same parent
+> recording fall into both train and test, inflating every score to ≈ 0.92 macro-F1. After moving to a
+> group-aware split the scores dropped to the honest ≈ 0.80 reported here. The earlier figures are not
+> comparable and have been retired.
 
 ---
 
 ## 1. Headline Results
 
-| Model | Paradigm | Test Acc | Macro F1 | Macro AUC | Params | ONNX / model size |
+| Model | Paradigm | Test Acc | Macro F1 | Macro AUC | Params | Size |
 |---|---|---|---|---|---|---|
-| **ProtoNet** | Few-shot metric learning | **0.9311** | 0.9205 | **0.9938** | 1.30 M | 5.0 MB |
-| **W2V2-L2** | Transfer learning (frozen) | 0.9297 | **0.9210** | 0.9911 | 0.53 M head + 94 M backbone | 2 MB head (+ ~360 MB backbone) |
-| **Custom CNN** | Supervised classification | 0.9264 | 0.9166 | — † | 1.21 M | 4.6 MB |
-| **OC-SVM** | Classical anomaly detection | 0.5100 ‡ | — | 0.7790 ‡ | 285 SVs | < 1 MB |
-| **Conv-AE** | Unsupervised anomaly detection | 0.5147 ‡ | — | 0.6033 ‡ | 19.48 M | 74 MB |
+| **Custom CNN** | Supervised classification | **0.8263** | **0.8069** | **0.9757** | 1.21 M | 4.6 MB |
+| **ProtoNet** | Few-shot metric learning | 0.8241 | 0.8036 | 0.9748 | 1.30 M | 5.0 MB |
+| **W2V2-L2** | Frozen out-of-species transfer | 0.7806 | 0.7626 | 0.9605 | 0.53 M head + truncated encoder | 2 MB head |
+| **Conv-AE** | Unsupervised anomaly detection | 0.51 ‡ | — | 0.8050 ‡ | 29.2 M | ~110 MB |
+| **OC-SVM** | Classical anomaly detection | 0.51 ‡ | — | 0.7192 ‡ | 1,464 SVs | < 2 MB |
 
-† CNN notebook did not log AUC; macro F1 / accuracy are directly comparable.
-‡ OC-SVM and Conv-AE are binary anomaly detectors (threat vs. background); accuracy/AUC are binary, not 7-class.
+‡ Conv-AE and OC-SVM are binary anomaly detectors (threat vs. background); their accuracy/AUC are
+binary, not 7-class. The p95-threshold accuracy sits near 0.51 because the test set is ~58 % threats
+while these detectors are tuned to a ~5 % false-positive rate on background — see §3.
 
-**The three discriminative models (ProtoNet, W2V2-L2, CNN) are statistically tied** at the top —
-macro F1 spans just 0.9166–0.9210. The two anomaly-detection models form a clearly separate,
-lower-performing tier — though **OC-SVM (binary AUC 0.779) clearly outperforms the much heavier
-Conv-AE (0.603)** despite being a classical model under 1 MB.
+**The two task-trained classifiers lead and are statistically tied:** CNN (macro-F1 0.807) ≈
+ProtoNet (0.804), a 0.003 gap that is within noise. The frozen-transfer **W2V2-L2 sits a clear step
+behind (0.763)** — expected, since it is a *frozen* wav2vec 2.0 *layer-2* embedding with only a small
+trainable head (this is the RQ5 finding, not a bug). The two anomaly detectors form a separate, lower
+tier, where the **Conv-AE (binary AUC 0.805) now outperforms the classical OC-SVM (0.719)**.
 
 ---
 
@@ -37,150 +45,148 @@ Conv-AE (0.603)** despite being a classical model under 1 MB.
 
 | Class | CNN | ProtoNet | W2V2-L2 | Best |
 |---|---|---|---|---|
-| `threat_gunshot` | 0.9990 | 0.9969 | 0.9979 | **CNN** |
-| `threat_human` | 0.9521 | 0.9641 | 0.9702 | **W2V2** |
-| `threat_chainsaw` | 0.9254 | 0.9348 | 0.9304 | **ProtoNet** |
-| `threat_vehicle` | 0.8922 | 0.8932 | 0.9210 | **W2V2** |
-| `threat_dog` | 0.8098 | 0.8148 | 0.8386 | **W2V2** |
-| `background_animals` | 0.9140 | 0.9205 | 0.9131 | **ProtoNet** |
-| `background_wind_rain` | 0.9236 | 0.9194 | 0.8757 | **CNN** |
+| `threat_gunshot` | 0.815 | **0.843** | 0.812 | ProtoNet |
+| `threat_human` | 0.868 | **0.895** | 0.858 | ProtoNet |
+| `threat_chainsaw` | **0.824** | 0.813 | 0.780 | CNN |
+| `threat_dog` | **0.794** | 0.708 | 0.738 | CNN |
+| `threat_vehicle` | 0.681 | **0.723** | 0.632 | ProtoNet |
+| `background_animals` | **0.836** | 0.820 | 0.762 | CNN |
+| `background_wind_rain` | **0.830** | 0.823 | 0.756 | CNN |
 
 **Key observations**
 
-- **Gunshot is near-perfect everywhere** (F1 ≥ 0.997). This is the single most important class for
-  an anti-poaching system, and all three discriminative models nail it. ProtoNet and W2V2 both achieve
-  **gunshot recall = 1.000** (zero missed gunshots on the test set).
-- **`threat_dog` is the universal weak point** (F1 0.81–0.84). Dog barks overlap acoustically with
-  other animal vocalisations; W2V2's richer features recover the most here (+0.029 over CNN).
-- **W2V2 wins the hard classes** (dog, vehicle, human) thanks to its pretrained representations, but
-  **loses on `bg_wind_rain`** (0.876) — its frozen features are tuned for speech, not diffuse noise.
-- **CNN is the most balanced** despite being trained from scratch, and tops the chart on the two
-  highest-stakes/easiest-to-confuse extremes (gunshot, wind/rain).
+- **Vehicle is the universal weak point** (F1 0.63–0.72) — yet its *AUC* is high in every model
+  (≈ 0.97). The class is **separable but mis-thresholded**: vehicle is the smallest threat class
+  (646 train windows), so the decision boundary, not the representation, is the limiter. This is a
+  threshold-tuning opportunity, not a retraining one.
+- **Gunshot is solid, not perfect** (F1 0.81–0.84, AUC ≈ 0.97). The highest-stakes class is reliably
+  ranked by all three; the F1 ceiling is again a precision/threshold effect, not missed events.
+- **CNN is the most balanced model**, topping 4 of 7 classes (chainsaw, dog, and both backgrounds)
+  despite being trained from scratch with no external weights.
+- **ProtoNet wins the metric-learning-friendly classes** (gunshot, human, vehicle), consistent with
+  its prototype-distance objective separating tight clusters well.
+- **W2V2-L2 trails on every class** (and most on the backgrounds, 0.76), because its frozen layer-2
+  features are tuned for speech structure, not diffuse environmental noise.
 
 ---
 
-## 3. Anomaly-Detection Paradigm (OC-SVM vs. Conv-AE)
+## 3. Anomaly-Detection Paradigm (Conv-AE vs. OC-SVM)
 
-Both anomaly detectors were trained on **background audio only** and flag deviating clips as threats.
-OC-SVM draws an RBF boundary around background MFCC features; Conv-AE flags clips it cannot reconstruct.
+Both anomaly detectors are trained on **background audio only** and flag deviating clips as threats.
+Conv-AE flags clips it cannot reconstruct (high MSE); OC-SVM draws an RBF boundary around background
+MFCC features and flags clips that fall outside it.
 
-| Metric | OC-SVM | Conv-AE |
+> **Methodology note — what changed.** Hyperparameters *and* the final checkpoint for both detectors
+> are selected on **validation detection AUC** (background-vs-threat), not on a label-free proxy.
+> This matters: an earlier Conv-AE selected on lowest reconstruction loss scored only 0.60 binary AUC,
+> because the minimum-reconstruction-error model is **not** the best anomaly detector. Selecting on
+> detection AUC lifted it to **0.805**. Conv-AE used an Optuna search (latent dim, lr, dropout, weight
+> decay); OC-SVM used an exhaustive grid (kernel × nu × gamma). Threat labels are used only for this
+> *selection*, never for training — the unsupervised claim (RQ3) holds.
+
+| Metric | Conv-AE | OC-SVM |
 |---|---|---|
-| Binary AUC (threat vs. bg) | **0.7790** | 0.6033 |
-| Binary Avg. Precision | **0.7822** | 0.6977 |
-| Accuracy @ p95 threshold | 0.5100 | 0.5147 |
-| TPR (recall on threats) | 0.1958 | 0.1851 |
-| FPR | 0.0650 | 0.0397 |
-| Model size | **< 1 MB (285 SVs)** | 74 MB / 19.5 M params |
+| Binary AUC (threat vs. bg) | **0.8050** | 0.7192 |
+| Binary Avg. Precision | **0.7580** | 0.6407 |
+| TPR (recall on threats) @ ~5 % FPR | **0.343** | 0.163 |
+| FPR at operating point | 0.054 | 0.057 |
+| Model size | 29.2 M params / ~110 MB | **1,464 SVs / < 2 MB** |
 
 **Per-class detectability (AUC vs. background):**
 
-| Class | OC-SVM | Conv-AE | Notes |
+| Class | Conv-AE | OC-SVM | Notes |
 |---|---|---|---|
-| `threat_human` | 0.8321 | **0.9431** | Both detect it; Conv-AE better |
-| `threat_chainsaw` | **0.8126** | 0.5905 | OC-SVM far better |
-| `threat_gunshot` | **0.8050** | 0.3720 | **OC-SVM rescues it; Conv-AE fails** |
-| `threat_vehicle` | **0.6935** | 0.4121 | OC-SVM better |
-| `threat_dog` | **0.5907** | 0.4733 | Both weak |
+| `threat_human` | **0.957** | 0.888 | Both detect it; Conv-AE best |
+| `threat_gunshot` | **0.839** | 0.627 | **Conv-AE now rescues gunshot** |
+| `threat_chainsaw` | 0.758 | 0.758 | Tied |
+| `threat_dog` | **0.697** | 0.639 | Both weak; Conv-AE better |
+| `threat_vehicle` | 0.404 | **0.596** | **OC-SVM's only win; Conv-AE below chance** |
 
-**Key finding (RQ3): the classical model wins, and the paradigm is still not viable as a primary detector.**
+**Key finding (RQ3): the deep detector wins once it is selected for detection, but the paradigm is
+still not a primary detector.**
 
-Two things stand out:
-
-1. **OC-SVM decisively beats the deep Conv-AE** (binary AUC 0.779 vs. 0.603) at **1/100th the size**
-   (< 1 MB vs. 74 MB). Most importantly, it **rescues gunshot detection** — Conv-AE's gunshot AUC of
-   0.37 was *worse than random*, while OC-SVM reaches 0.805. The reason: Conv-AE scores a clip by its
-   *mean* reconstruction error, so a brief gunshot transient drowns in ~3 s of reconstructable
-   background. OC-SVM's MFCC mean+std summary preserves the spectral signature of that transient, so
-   the clip lands outside the background boundary. For an anti-poaching system this is the difference
-   between a useless and a usable anomaly detector.
-
-2. **Neither is good enough to deploy alone.** Even the better model only ranks threats at AUC 0.78,
-   and at a sensible 5–6% FPR operating point it catches just **~20% of threats** (TPR 0.196). That is
-   far below the discriminative tier (macro F1 ≈ 0.92, gunshot F1 ≈ 0.997). The conclusion holds:
-   anomaly detection trained without any labelled threats cannot match supervised learning here — but
-   **the classical OC-SVM is the right choice within the paradigm**, and salvages it from the
-   "completely broken" verdict the Conv-AE alone would have earned.
+1. **Conv-AE beats OC-SVM on 4 of 5 threat classes and on every aggregate metric** (binary AUC 0.805
+   vs. 0.719; TPR 0.34 vs. 0.16 at the same ~5 % FPR). Most importantly it **detects gunshot well**
+   (AUC 0.839) — the opposite of the earlier reconstruction-loss-selected Conv-AE, whose gunshot AUC
+   was below random. Conv-AE's one blind spot is **vehicle** (AUC 0.404, below chance): low-frequency
+   engine rumble overlaps the background it learned to reconstruct, so it reads as "normal".
+2. **OC-SVM is now the lighter but weaker option.** Its only per-class advantage is vehicle, and at a
+   usable 5–6 % FPR it catches only ~16 % of threats. Its decisive asset is **size**: < 2 MB and
+   negligible CPU, versus Conv-AE's 29 M params / ~110 MB.
+3. **Neither is good enough to deploy alone.** Even the better detector ranks threats at AUC 0.81 and
+   catches ~34 % of threats at 5 % FPR — far below the discriminative tier (macro-F1 ≈ 0.80, all
+   threat AUCs ≥ 0.94). Anomaly detection trained without any labelled threats cannot match supervised
+   learning here; that is the RQ3 answer.
 
 ---
 
 ## 4. Deployment Cost (Raspberry Pi 4 + ONNX Runtime, CPU)
 
-The whole point of Alertreck is **offline edge inference**. Raw accuracy is necessary but not
-sufficient — the model has to run in real time on a Pi 4 CPU.
+The whole point of Alertreck is **offline edge inference**: the model must run in real time on a Pi 4 CPU.
 
 | Model | On-device footprint | Self-contained? | Real-time on Pi 4 CPU? |
 |---|---|---|---|
 | **Custom CNN** | 4.6 MB ONNX, 1.2 M params | ✅ mel → class, single graph | ✅ Yes — lightweight conv net |
 | **ProtoNet** | 5.0 MB ONNX, 1.3 M params | ⚠️ needs precomputed class prototypes | ✅ Yes — embed + nearest-prototype |
-| **OC-SVM** | < 1 MB joblib, 285 support vectors | ✅ MFCC → score | ✅ Yes — trivial CPU cost |
-| **W2V2-L2** | 2 MB head **but** requires the 94 M-param `wav2vec2-base` transformer backbone (~360 MB) to generate embeddings | ❌ head alone is useless | ❌ Impractical — transformer inference is too heavy for real-time CPU |
-| **Conv-AE** | 74 MB ONNX, 19.5 M params | ✅ | ⚠️ Runs, but detection quality is unusable |
+| **OC-SVM** | < 2 MB joblib, 1,464 support vectors | ✅ MFCC → score | ✅ Yes — trivial CPU cost |
+| **W2V2-L2** | 2 MB head + the **layer-2-truncated** wav2vec 2.0 encoder (~24 M params, ~25 % of the 94 M base) | ❌ head alone is useless | ⚠️ Truncation is the on-device design (Geldenhuys & Niesler, 2026); lighter than the full backbone but still a transformer, and accuracy trails the CNN |
+| **Conv-AE** | ~110 MB ONNX, 29.2 M params | ✅ | ⚠️ Runs, but heavy for a confirmatory role |
 
-**Critical caveat for W2V2-L2:** the exported `w2v2_head.onnx` (2 MB) is *only the classifier head*.
-At inference it consumes 768-dim embeddings that must be produced by the full `facebook/wav2vec2-base`
-backbone — a ~94 M-parameter transformer. That backbone is the real cost, and it is not exported here.
-Running it per 3-second window on a Pi 4 CPU is not viable for continuous real-time monitoring.
-**W2V2-L2 is an excellent accuracy benchmark but a poor deployment candidate.**
+**Note on W2V2-L2 truncation.** The frozen encoder is *physically truncated to its first 2 transformer
+layers* (`scripts/prepare_w2v2_embeddings.py`), which is the paper's on-device motivation and cuts the
+backbone to a fraction of the full 94 M base. It is therefore far more deployable than a full wav2vec
+2.0 — but at 0.763 macro-F1 it is still below the CNN (0.807), so the CNN remains the deployment pick
+on accuracy grounds regardless.
 
 ---
 
 ## 5. Recommendation
 
-There are two answers depending on the question being asked.
-
-### Best raw performance → **ProtoNet**
-- Highest test accuracy (**0.9311**) and highest macro AUC (**0.9938**).
-- Macro F1 (0.9205) is statistically tied with W2V2 (0.9210) — a 0.0005 gap is noise.
-- Gunshot recall = 1.000.
-- Use this as the **accuracy ceiling / benchmark** in the dissertation.
-
-### Best for deployment (recommended primary model) → **Custom CNN**
-- Threat performance is within ~1 F1 point of the best model on every class, and it is the **single
-  best model on gunshot (0.999)** — the highest-stakes class.
-- **Smallest self-contained footprint** (4.6 MB, 1.2 M params), mel-spectrogram → class in one graph,
-  **no backbone dependency**, comfortably real-time on a Pi 4 CPU.
+### Best accuracy **and** best for deployment → **Custom CNN**
+- **Highest macro-F1 (0.807) and macro-AUC (0.976)** of all five models — the leak-free winner.
+- Most balanced per-class profile (tops 4 of 7 classes); strong on gunshot (AUC 0.969).
+- **Smallest self-contained footprint** (4.6 MB, 1.2 M params), mel → class in one ONNX graph, no
+  backbone dependency, comfortably real-time on a Pi 4 CPU.
 - Trained from scratch on this dataset, so it is fully owned and reproducible with no external weights.
 
-### Suggested deployment architecture
-```
-                ┌─────────────────────────┐
-  mic ──► mel ─►│  CNN  (primary, 4.6 MB)  │──► threat class + confidence ──► GSM/GPS alert
-                └─────────────────────────┘
-```
-The CNN alone is sufficient. If a second, independent opinion is wanted to suppress false positives,
-the **OC-SVM** (< 1 MB, MFCC-based, gunshot AUC 0.805) is the only viable confirmatory model — it adds
-a different feature view at negligible cost. Do **not** use Conv-AE, whose gunshot detection is worse
-than random.
+This is the cleanest possible result: the deployed model is also the most accurate. **CNN is the
+primary model.**
 
-### Best classical / anomaly model → **OC-SVM**
-- Within the anomaly-detection paradigm, OC-SVM beats Conv-AE on every metric that matters (binary AUC
-  0.779 vs. 0.603, gunshot AUC 0.805 vs. 0.372) at **1/100th the size**.
-- Not strong enough to be a primary detector (TPR ~20% at a usable threshold), but a sound,
-  near-free confirmatory layer and the better answer to the classical-vs-deep anomaly question.
+### Accuracy benchmark → **ProtoNet**
+- Statistically tied with the CNN on macro-F1 (0.804 vs. 0.807) and best on gunshot/human/vehicle F1.
+- Needs precomputed prototypes at inference; a fine benchmark, no advantage over the CNN to justify the
+  extra moving part in deployment.
 
-### Models to drop from deployment
-- **W2V2-L2** — backbone too heavy for the Pi 4; keep as an accuracy benchmark only.
-- **Conv-AE** — fails on the threats that matter (gunshot AUC 0.37) and is 74 MB; keep only as a
-  documented negative result showing deep reconstruction loses to a classical boundary here.
+### Frozen-transfer arm (RQ5) → **W2V2-L2**
+- The honest out-of-species transfer result: frozen layer-2 features reach 0.763 macro-F1, below the
+  task-trained CNN — confirming that the advantage Geldenhuys & Niesler report for elephant calls
+  *partially* extends to mechanical/human threat sounds but does not overtake supervised learning.
+- Truncated encoder makes it deployable in principle; kept as the paradigm benchmark, not deployed.
+
+### Confirmatory anomaly layer → size/accuracy trade-off
+- **Conv-AE** is the better detector (AUC 0.805, gunshot AUC 0.839, ~34 % TPR at 5 % FPR) but costs
+  29 M params / ~110 MB.
+- **OC-SVM** is far lighter (< 2 MB) but weaker (AUC 0.719, ~16 % TPR) and only wins on vehicle.
+- For a near-free second opinion on the Pi, **OC-SVM** remains the pragmatic add-on; if footprint is
+  not a constraint, **Conv-AE** is the stronger detector. Neither is a primary detector.
 
 ---
 
 ## 6. Summary Table
 
-| | CNN | ProtoNet | W2V2-L2 | OC-SVM | Conv-AE |
+| | CNN | ProtoNet | W2V2-L2 | Conv-AE | OC-SVM |
 |---|---|---|---|---|---|
-| Paradigm | Supervised | Few-shot | Transfer | Classical anomaly | Unsup. anomaly |
-| Test acc | 0.9264 | **0.9311** | 0.9297 | 0.5100 ‡ | 0.5147 ‡ |
-| Macro F1 | 0.9166 | 0.9205 | **0.9210** | — | — |
-| Macro / binary AUC | — | **0.9938** | 0.9911 | 0.7790 ‡ | 0.6033 ‡ |
-| Gunshot | F1 **0.9990** | F1 0.9969 | F1 0.9979 | AUC 0.805 | AUC 0.372 |
-| Params | 1.21 M | 1.30 M | 94 M (w/ backbone) | 285 SVs | 19.48 M |
-| Size | 4.6 MB | 5.0 MB | ~360 MB | **< 1 MB** | 74 MB |
-| Edge-ready | ✅ **Best** | ✅ | ❌ | ✅ | ⚠️ |
-| Role | **Deploy** | Benchmark | Benchmark | Confirmatory | Negative result |
+| Paradigm | Supervised | Few-shot | Frozen transfer | Unsup. anomaly | Classical anomaly |
+| Test acc | **0.8263** | 0.8241 | 0.7806 | 0.51 ‡ | 0.51 ‡ |
+| Macro F1 | **0.8069** | 0.8036 | 0.7626 | — | — |
+| Macro / binary AUC | **0.9757** | 0.9748 | 0.9605 | 0.8050 ‡ | 0.7192 ‡ |
+| Gunshot | F1 0.815 | F1 **0.843** | F1 0.812 | AUC 0.839 | AUC 0.627 |
+| Params | 1.21 M | 1.30 M | 0.53 M head + ~24 M enc. | 29.2 M | 1,464 SVs |
+| Size | 4.6 MB | 5.0 MB | 2 MB head | ~110 MB | **< 2 MB** |
+| Edge-ready | ✅ **Best** | ✅ | ⚠️ | ⚠️ | ✅ |
+| Role | **Deploy** | Benchmark | RQ5 benchmark | Confirmatory (heavy) | Confirmatory (light) |
 
-‡ OC-SVM / Conv-AE are binary anomaly detectors; their accuracy and AUC are threat-vs-background, not 7-class.
+‡ Conv-AE / OC-SVM are binary anomaly detectors; their accuracy and AUC are threat-vs-background, not 7-class.
 
 ---
 

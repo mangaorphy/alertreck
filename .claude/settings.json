@@ -40,7 +40,28 @@
       "Bash(ssh -o ConnectTimeout=8 alertreck@alertreck.local 'arecord -D plughw:CARD=sndrpigooglevoi,DEV=0 -f S16_LE -r 44100 -c 1 -d 6 /tmp/alertreck_mic.wav 2>&1 | tail -3; ls -la /tmp/alertreck_mic.wav')",
       "Bash(scp -o ConnectTimeout=8 alertreck@alertreck.local:/tmp/alertreck_mic.wav /Users/cococe/Desktop/alertreck/pi_mic_test.wav)",
       "Bash(ssh -o ConnectTimeout=8 alertreck@alertreck.local 'arecord -D plughw:CARD=sndrpigooglevoi,DEV=0 -f S16_LE -r 44100 -c 1 -d 6 /tmp/alertreck_mic2.wav 2>&1 | tail -2')",
-      "Bash(scp -o ConnectTimeout=8 alertreck@alertreck.local:/tmp/alertreck_mic2.wav /Users/cococe/Desktop/alertreck/pi_mic_test2.wav)"
+      "Bash(scp -o ConnectTimeout=8 alertreck@alertreck.local:/tmp/alertreck_mic2.wav /Users/cococe/Desktop/alertreck/pi_mic_test2.wav)",
+      "Bash(ssh -o ConnectTimeout=8 alertreck@alertreck.local 'arecord -D plughw:CARD=sndrpigooglevoi,DEV=0 -f S16_LE -r 44100 -c 1 -d 10 /tmp/alertreck_silence.wav 2>&1 | tail -1')",
+      "Bash(scp -o ConnectTimeout=8 alertreck@alertreck.local:/tmp/alertreck_silence.wav /Users/cococe/Desktop/alertreck/pi_silence.wav)",
+      "Bash(ssh -o ConnectTimeout=8 alertreck@alertreck.local 'echo \"== procs using audio ==\"; ps -eo pid,comm,args | grep -iE \"arecord|alertrack|python\" | grep -v grep; echo \"== fuser on card ==\"; fuser -v /dev/snd/* 2>&1 | tail -8')",
+      "Bash(ssh -o ConnectTimeout=8 alertreck@alertreck.local ' *)",
+      "Bash(python3 -m py_compile alertrack/config.py)",
+      "Bash(ssh -o ConnectTimeout=8 alertreck@alertreck.local 'find /home/alertreck -path \"*/alertrack/config.py\" 2>/dev/null')",
+      "Bash(ssh -o ConnectTimeout=8 alertreck@alertreck.local 'cp /home/alertreck/alertreck/alertrack/config.py /home/alertreck/alertreck/alertrack/config.py.bak-$\\(date +%Y%m%d-%H%M%S\\) && echo backed-up')",
+      "Bash(scp -o ConnectTimeout=8 /Users/cococe/Desktop/alertreck/alertrack/config.py alertreck@alertreck.local:/home/alertreck/alertreck/alertrack/config.py)",
+      "Bash(ssh -o ConnectTimeout=8 alertreck@alertreck.local 'cd /home/alertreck/alertreck && grep -nE \"SILENCE_THRESHOLD|ONSET_MIN_RMS|MIC_DEVICE_INDEX\" alertrack/config.py && python3 -c \"import ast; ast.parse\\(open\\(\\\\\"alertrack/config.py\\\\\"\\).read\\(\\)\\); print\\(\\\\\"parse OK\\\\\"\\)\"')",
+      "Bash(grep -rniE \"0\\\\.9[0-5][0-9]?|9[0-3]\\\\.[0-9]%|9[0-3]%|macro.?f1.{0,8}0\\\\.9|accuracy.{0,8}0\\\\.9\" README.md alertrack/README.md docs/MODEL_COMPARISON.md docs/MODEL_DESIGN.md docs/DESIGN.md)",
+      "Bash(/Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12 cad/alertreck_industrial_enclosure.py)",
+      "Bash(ping -c 1 -t 2 alertreck.local)",
+      "Bash(ssh -o BatchMode=yes -o ConnectTimeout=4 alertreck@192.168.1.80 'echo CONNECTED; hostname')",
+      "Bash(ssh-keyscan -H 192.168.1.80)",
+      "Bash(ssh -o BatchMode=yes -o ConnectTimeout=4 alertreck@192.168.1.80 'echo CONNECTED')",
+      "Bash(ssh alertreck@192.168.1.80 'echo \"=== any daemon holding the mic? ===\"; pgrep -af \"alertrack.main\" || echo \"none running\"; echo; echo \"=== boot config overlays ===\"; grep -Ei \"i2s|googlevoice|dtparam=audio\" /boot/firmware/config.txt 2>/dev/null || grep -Ei \"i2s|googlevoice|dtparam=audio\" /boot/config.txt 2>/dev/null; echo; echo \"=== dmesg for i2s/mic/simple-card ===\"; dmesg 2>/dev/null | grep -Ei \"i2s|voicehat|simple-card|asoc|inmp\" | tail -20')",
+      "Bash(ssh alertreck@192.168.1.80 'kill 1665 2>/dev/null; sleep 2; pgrep -af alertrack.main || echo \"daemon stopped\"; echo \"=== raw arecord on hw:3,0 \\(3s\\) ===\"; arecord -D hw:3,0 -f S32_LE -r 48000 -c 2 -d 3 /tmp/mictest.wav 2>&1 | tail -5; echo \"=== analyze amplitude ===\"; python3 -c \" *)",
+      "Bash(ssh alertreck@192.168.1.80 'pkill -9 -f alertrack.main; sleep 2; pgrep -af alertrack.main || echo \"DAEMON KILLED\"; echo \"=== fuser on card 3 ===\"; fuser -v /dev/snd/* 2>&1 | head; echo \"=== raw arecord hw:3,0 ===\"; arecord -D hw:3,0 -f S32_LE -r 48000 -c 2 -d 3 /tmp/mictest.wav 2>&1 | tail -3; ls -la /tmp/mictest.wav 2>&1')",
+      "Bash(ssh alertreck@192.168.1.80 'pgrep -af alertrack.main || echo DAEMON_GONE; echo \"---arecord---\"; arecord -D hw:3,0 -f S32_LE -r 48000 -c 2 -d 3 /tmp/mictest.wav 2>&1 | tail -3; ls -la /tmp/mictest.wav')",
+      "Bash(ssh alertreck@192.168.1.80 *)",
+      "Bash(ssh alertreck@192.168.1.80 'echo \"=== GPIO18/19/20/21 pin mux \\(need ALT0/ALT2 = I2S/PCM\\) ===\"; for p in 18 19 20 21; do \\(raspi-gpio get $p 2>/dev/null || pinctrl get $p 2>/dev/null\\); done; echo; echo \"=== sound card capture DAI ===\"; cat /proc/asound/card3/pcm0c/sub0/hw_params 2>/dev/null || echo \"no capture substream file\"; echo; echo \"=== is voicehat capture DAI in the card? ===\"; ls /proc/asound/card3/ 2>&1')"
     ]
   }
 }

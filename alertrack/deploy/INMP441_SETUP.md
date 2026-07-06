@@ -38,6 +38,70 @@ device. After this setup it becomes the ALSA **default**, resampled to the model
 
 ---
 
+## 1b. Combined wiring — INMP441 (I2S) **and** SIM808 (UART) together
+
+The mic and the SIM808 do **not** share any signal pin. The INMP441 sits on the
+Pi's **I2S bus** (GPIO18/19/20); the SIM808 sits on the **UART** (GPIO14/15). The
+only thing they share is **ground**, which is required, not a conflict — every GND
+pin on the Pi is the same electrical rail, so each device just uses its own.
+
+| Device | Wire | Pi signal | Pi physical pin |
+|--------|------|-----------|-----------------|
+| INMP441 | VDD  | 3V3 (**3.3 V only**) | **1**  |
+| INMP441 | GND  | GND                  | **6**  |
+| INMP441 | L/R  | GND → left channel   | **9**  |
+| INMP441 | SCK  | GPIO18 / I2S BCLK    | **12** |
+| INMP441 | WS   | GPIO19 / I2S FS      | **35** |
+| INMP441 | SD   | GPIO20 / I2S DIN     | **38** |
+| SIM808  | RXD  | GPIO14 / TXD         | **8**  |
+| SIM808  | TXD  | GPIO15 / RXD         | **10** |
+| SIM808  | GND  | GND (common ground)  | **20** |
+| SIM808  | VCC  | **external 5 V ≥2 A supply — NOT the Pi's 5 V** | — |
+
+Signal pins used: mic → **12, 35, 38**; SIM808 → **8, 10**. They never overlap.
+(The mic's L/R sits on GND pin 9; the SIM808 uses a *different* GND pin — 20 — so
+there is no contention even though both need ground.)
+
+```
+Raspberry Pi 4 · 40-pin header (pin 1 = top-left)
+
+ pin 1  [3V3 ]──VDD INMP441          pin 2  [5V ]
+ pin 5  [    ]                       pin 6  [GND]──GND INMP441
+ pin 7  [    ]                       pin 8  [TXD]──RXD SIM808
+ pin 9  [GND ]──L/R INMP441          pin 10 [RXD]──TXD SIM808
+ pin 11 [    ]                       pin 12 [I2S CLK ]──SCK INMP441
+ pin 13 [    ]                       pin 14 [GND     ]
+ pin 19 [    ]                       pin 20 [GND     ]──GND SIM808
+   ...                               pin 35 [I2S FS  ]──WS  INMP441
+                                     pin 38 [I2S DATA]──SD  INMP441
+```
+
+**Three things that actually matter (not the pin numbers):**
+
+1. **SIM808 VCC → external 5 V ≥2 A supply, never the Pi's 5 V pin.** The GSM radio
+   pulls ~2 A bursts when transmitting; powering it from the Pi browns out and
+   reboots the Pi mid-alert. Wire only the SIM808's TX, RX, and GND to the Pi, and
+   connect the external supply's ground to a Pi GND (pin 20 above = common ground).
+2. **INMP441 is 3.3 V only** — VDD to pin 1 (3V3), never a 5 V pin.
+3. **UART is crossed, not straight:** SIM808 **TXD → Pi pin 10 (RXD)**, SIM808
+   **RXD → Pi pin 8 (TXD)**. If SMS/GPS returns nothing, swap these two first — it is
+   the most common cause.
+
+**Boot config for both buses at once** (`/boot/firmware/config.txt`) — all four lines
+coexist because I2S and UART are separate peripherals:
+
+```
+dtparam=i2s=on
+dtoverlay=googlevoicehat-soundcard
+enable_uart=1
+dtoverlay=disable-bt
+```
+
+Then free the UART for the SIM808: `sudo systemctl disable hciuart` and reboot. The
+SIM808 comes up on `/dev/ttyAMA0` at 9600 baud, matching `SIM808_PORT` in `config.py`.
+
+---
+
 ## 2. Enable I2S + the soundcard overlay
 
 Edit the boot config (Bookworm: `/boot/firmware/config.txt`; older OS: `/boot/config.txt`):
@@ -133,3 +197,33 @@ If you prefer not to override the system default, set in `config.py`
   point `asound.conf`/`MIC_DEVICE_INDEX` at that card.
 - **Sample rate:** the mic runs 48 kHz natively; `plug` resamples to the 44.1 kHz
   the models were trained on. Do **not** change `SAMPLE_RATE` in `config.py`.
+
+---
+
+## 7. Field enclosure (stacked Pi 4 + SIM808)
+
+A weatherproof, FDM-printable enclosure that stacks the Pi 4 (lower) and SIM808 EVB
+(upper) is generated parametrically:
+
+```bash
+/Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12 \
+    cad/alertreck_stack_enclosure.py
+```
+
+Outputs to `cad/`: `alertreck_stack_body.{stl,step}`, `alertreck_stack_lid.{stl,step}`,
+`alertreck_stack_sim_door.stl`. Internal cavity 100×70×65 mm, 3 mm walls / 4 mm floor.
+
+- **Standoffs:** Pi on 4× M2.5 posts **7 mm** tall (58×49 pattern); SIM808 on 4×
+  corner posts to **Z=37 mm** (10 mm above the Pi top), kept just outside the Pi
+  footprint so they don't foul the board.
+- **Antennas:** two 8 mm SMA bulkhead holes (GSM + GPS) on the **+X wall** (Face 2,
+  upper zone, beside the Pi USB/Ethernet); plus an 8 mm GPS port in the **lid centre**
+  for a sky-facing patch antenna.
+- **SIM access:** sliding door on the **+Y wall** (Face 4, `sim_card_door.stl`),
+  openable from outside without removing the lid.
+- **Wiring note:** the INMP441 (I2S) and SIM808 (UART) wire to the GPIO header
+  internally per §1b — the box needs **no** USB port for the mic. The Pi USB-A
+  cutouts remain for service access only.
+- **PETG print settings:** 0.2 mm layer, 4 perimeters, 30 % gyroid infill, body
+  printed open-face-up. See the header of `cad/alertreck_stack_enclosure.py` for the
+  full face map and the design notes.

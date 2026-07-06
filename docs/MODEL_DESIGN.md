@@ -1,7 +1,7 @@
 # Alertreck — Model Design Overview
 
-**Version:** 1.0  
-**Last Updated:** 2026-06-01  
+**Version:** 1.1  
+**Last Updated:** 2026-06-30  
 **Author:** Orpheus Manga
 
 ---
@@ -284,7 +284,9 @@ At test time, report per-class AUC-ROC treating each threat class as the positiv
 ```
 Encoder + Decoder → ONNX (opset 17)
 Inference: compute mel → run AE → MSE vs background distribution → threshold → alert/no alert
-(Note: Conv-AE is a documented negative result — gunshot AUC 0.37 — and is not deployed.)
+(Note: when selected on validation detection AUC, Conv-AE reaches binary AUC 0.805 and gunshot AUC
+0.839 — the best of the two anomaly detectors — but its 29 M params / ~110 MB and below-chance vehicle
+AUC keep it as a complementary signal, not the primary classifier.)
 ```
 
 The AE cannot report *which* threat is present — only that something unusual is detected. At deployment, the CNN is the primary classifier; Conv-AE is a complementary anomaly signal.

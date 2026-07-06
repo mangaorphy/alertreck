@@ -87,10 +87,14 @@ CHUNK_SIZE    = 1024     # samples per sounddevice read
 # ALSA *default*, which resamples 48 kHz→44.1 kHz and downmixes to mono, so the
 # 44.1 kHz model pipeline below is unchanged.
 #
-#   None  → ALSA default  (= the I2S mic, via deploy/asound.conf)   ← recommended
-#   int   → explicit PortAudio index (python3 -c "import sounddevice; print(sounddevice.query_devices())")
-#   str   → device name substring, e.g. "googlevoicehat" or "default"
-MIC_DEVICE_INDEX = None
+#   None           → ALSA default  (= the I2S mic, via deploy/asound.conf)
+#   int            → explicit PortAudio index (python3 -c "import sounddevice; print(sounddevice.query_devices())")
+#   str            → device name substring, e.g. "googlevoicehat" or "default"
+#
+# If the daemon prints rms=0.000 (flat zeros), PortAudio is opening the wrong
+# default device (HDMI or dummy). Fix: set this to "googlevoicehat" (name match)
+# or to the integer index from sounddevice.query_devices().
+MIC_DEVICE_INDEX = "googlevoicehat"   # name substring — change to int index if this still fails
 
 # ============================================================================
 # PREPROCESSING CONFIGURATION  (must match scripts/audio_preprocessing.py)
@@ -112,7 +116,9 @@ EBU_TARGET  = 10 ** (-23.0 / 20.0)   # −23 dBFS ≈ 0.07079
 # Silence gate — skip inference if raw RMS is below this level
 # Prevents amplified electronic noise from being classified as a threat.
 # Tune this up if the mic is noisy, down if real sounds are being skipped.
-SILENCE_THRESHOLD = 0.01    # raise if mic noise still triggers; lower if real sounds are skipped
+# Calibrated for the INMP441 I2S mic: measured ambient floor ≈ 0.0003, events ≈ 0.02.
+# (The old USB-mic value 0.01 sat ~32x above this floor and gated out real events.)
+SILENCE_THRESHOLD = 0.0015  # raise toward 0.002 if idle noise triggers; lower to 0.001 if faint events skipped
 
 # ── Mains-hum high-pass (field-mic fix, NOT part of training) ────────────────
 # USB mics inject 50 Hz mains hum (60 Hz in the Americas) that the clean training
@@ -142,7 +148,7 @@ ONSET_SETTLE_S      = 1.0    # wait after onset so the event centres in the 3 s 
 ONSET_FLOOR_ALPHA   = 0.10   # adaptive-floor EMA rate per poll (higher = faster tracking)
 ONSET_RECENT_S      = 0.5    # window of "recent" audio used for the current level
 ONSET_FRAME_MS      = 50     # frame size (ms) for energy measurement
-ONSET_MIN_RMS       = 0.01   # absolute floor — below this is silence, never triggers
+ONSET_MIN_RMS       = 0.0015 # absolute floor — below this is silence, never triggers (INMP441-calibrated; floor ≈ 0.0003)
 # Onset energy is measured on a high-passed copy so mains hum (50/60 Hz) doesn't pin
 # the trigger margin. Does NOT affect the audio sent to the model — only the trigger.
 ONSET_HPF_HZ        = 180.0  # ignore content below this when deciding "did something happen"
@@ -160,7 +166,8 @@ SIM808_TIMEOUT  = 10.0             # seconds to wait for AT command response
 
 # Ranger phone numbers for SMS alerts (E.164 format)
 RANGER_PHONE_NUMBERS: list[str] = [
-    "+250795607062",   # Ranger phone number
+    "+250795607062",  
+    "+250792957531", # Ranger phone number
 ]
 
 # SMS retry configuration

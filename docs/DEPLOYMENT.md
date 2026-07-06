@@ -1,64 +1,64 @@
-# ALERTRACK — Raspberry Pi Deployment Guide
+# ALERTRACK  Raspberry Pi Deployment Guide
 
 ---
 
-## Part 1 — Flash a Fresh SD Card
+## Part 1  Flash a Fresh SD Card
 
 **On your Mac:**
 
 1. Download **Raspberry Pi Imager** from [raspberrypi.com/software](https://www.raspberrypi.com/software/)
 2. Insert SD card (16 GB minimum, 32 GB recommended)
 3. Open Imager → **Choose OS** → `Raspberry Pi OS Lite (64-bit)` (no desktop needed)
-4. **Before writing** — click the gear icon (⚙️) and configure:
+4. **Before writing**  click the gear icon (⚙️) and configure:
    - Enable SSH ✓
-   - Set username: `alertreck` / password: (your choice — avoid special characters)
+   - Set username: `alertreck` / password: (your choice  avoid special characters)
    - Set Wi-Fi SSID + password (your hotspot or router)
-   - **Set Wi-Fi country** (e.g. `RW`) — without it the radio stays disabled and the Pi never joins
+   - **Set Wi-Fi country** (e.g. `RW`)  without it the radio stays disabled and the Pi never joins
    - Set hostname: `alertreck`
 5. Click **Write** and wait
 
 ---
 
-## Part 2 — Find the Pi's IP Address
+## Part 2  Find the Pi's IP Address
 
 After inserting the SD card and booting the Pi, wait ~60 seconds then try one of these:
 
-**Option A — mDNS hostname (easiest):**
+**Option A  mDNS hostname (easiest):**
 ```bash
 ping alertreck.local
 ```
 The IP will show in the response, e.g. `64 bytes from 192.168.1.88`
 
-**Option B — Scan the network:**
+**Option B  Scan the network:**
 ```bash
 # Install nmap if needed: brew install nmap
 nmap -sn 192.168.1.0/24 | grep -i raspberry
 ```
 > Replace `192.168.1` with your actual prefix. Check yours with: `ipconfig getifaddr en0`
 
-**Option C — From your router:**
+**Option C  From your router:**
 Log into your router admin page (usually `192.168.1.1`) → connected devices → look for `alertreck`
 
-**Option D — Connect a monitor and run:**
+**Option D  Connect a monitor and run:**
 ```bash
 hostname -I
 ```
 
 ---
 
-## Part 3 — SSH into the Pi
+## Part 3  SSH into the Pi
 
 ```bash
 ssh alertreck@alertreck.local
-# or use the IP directly (changes on DHCP reboot — prefer the hostname above)
+# or use the IP directly (changes on DHCP reboot  prefer the hostname above)
 ssh alertreck@192.168.1.88
 ```
 
-**First connection only** — type `yes` when asked about authenticity.
+**First connection only**  type `yes` when asked about authenticity.
 
 Username: `alertreck`  ·  Password: whatever you set in the Imager.
 
-> Modern Raspberry Pi OS (Bookworm) has **no default `pi` user** — the account is the username
+> Modern Raspberry Pi OS (Bookworm) has **no default `pi` user**  the account is the username
 > you set when flashing. If SSH says "Permission denied", you are almost certainly using the wrong
 > username (not the wrong password); SSH prompts for a password even when the user doesn't exist.
 
@@ -70,7 +70,7 @@ Eject, reinsert SD card into Pi, reboot.
 
 **Set up a `ssh alertreck` alias + passwordless login (one-time, recommended):**
 ```bash
-# On your Mac — add the alias to ~/.ssh/config
+# On your Mac  add the alias to ~/.ssh/config
 cat >> ~/.ssh/config <<'EOF'
 
 Host alertreck
@@ -86,13 +86,9 @@ ssh alertreck 'echo connected'    # should print "connected" with no prompt
 > **After a reflash** the Pi gets a new SSH identity. Clear the stale key first or SSH will refuse:
 > `ssh-keygen -R alertreck.local && ssh-keygen -R <old-ip>`, then `ssh-copy-id alertreck` again.
 
-> ⚠️ **Never pull power from a running Pi.** Yanking the cable (e.g. while swapping power supplies)
-> can corrupt the SD card and leave it unbootable — recoverable only by reflashing. Always
-> `sudo shutdown -h now` and wait for the green LED to stop before unplugging.
-
 ---
 
-## Part 4 — Set Up the Pi Environment
+## Part 4  Set Up the Pi Environment
 
 Run these commands **on the Pi** (inside the SSH session):
 
@@ -117,11 +113,11 @@ pip install numpy librosa sounddevice soundfile onnxruntime pyserial psutil
 
 ---
 
-## Part 5 — Export & Deploy the Model
+## Part 5  Export & Deploy the Model
 
 **On your Mac**, run from inside the `alertreck` project folder.
 
-> 📦 **Don't have the trained model?** The checkpoints, ONNX exports, and `results.json` are on
+>**Don't have the trained model?** The checkpoints, ONNX exports, and `results.json` are on
 > Google Drive: [Alertreck Data, Dataset & Models](https://drive.google.com/drive/folders/1U9BwIUNQ8Snl5RxR8LHthWfdOc_EdcTM?usp=sharing).
 > Download `models/custom_cnn/` to skip training and go straight to deployment.
 
@@ -134,7 +130,7 @@ pip install numpy librosa sounddevice soundfile onnxruntime pyserial psutil
 > with "model not found".
 
 ```bash
-# Step 1 — Export the trained PyTorch checkpoint to ONNX (traces at 301 frames, dynamic width)
+# Step 1  Export the trained PyTorch checkpoint to ONNX (traces at 301 frames, dynamic width)
 /opt/anaconda3/bin/python scripts/export_model.py \
   --model models/custom_cnn/best_model.pt \
   --out   models/custom_cnn/alertreck_cnn.onnx
@@ -142,10 +138,10 @@ pip install numpy librosa sounddevice soundfile onnxruntime pyserial psutil
 # Output : models/custom_cnn/alertreck_cnn.onnx
 #          input mel_spec = [batch, 1, 128, frames]  (frames dynamic; training shape = 301)
 
-# Step 2 — Copy the model to the Pi
+# Step 2  Copy the model to the Pi
 scp models/custom_cnn/alertreck_cnn.onnx alertreck@alertreck.local:~/alertreck/models/custom_cnn/
 
-# Step 3 — Copy the daemon code to the Pi
+# Step 3  Copy the daemon code to the Pi
 rsync -av --exclude='__pycache__' alertrack/ alertreck@alertreck.local:~/alertreck/alertrack/
 ```
 
@@ -160,7 +156,7 @@ rsync -av --exclude='__pycache__' alertrack/ alertreck@alertreck.local:~/alertre
 
 ---
 
-## Part 6 — Test the System on the Pi
+## Part 6  Test the System on the Pi
 
 ```bash
 # SSH into the Pi
@@ -176,112 +172,75 @@ python3 -c "from alertrack.inference.model import ONNXModel; ONNXModel()"
 python3 -c "from alertrack.audio.preprocess import test_preprocessor; test_preprocessor()"
 
 # Run the full system (Ctrl+C to stop).
-# Must run as a module (-m) from ~/alertreck — main.py uses package-relative imports,
+# Must run as a module (-m) from ~/alertreck  main.py uses package-relative imports,
 # so `python3 alertrack/main.py` fails with "attempted relative import with no known parent package".
 python3 -m alertrack.main
 ```
 
 > Run with `ALERTRACK_DEBUG=true python3 -m alertrack.main` to print the predicted class +
-> confidence and the raw RMS every inference cycle — essential for the calibration in Part 6A.
+> confidence and the raw RMS every inference cycle  essential for the calibration in Part 6A.
 
 ---
 
-## Part 6A — Microphone Calibration (critical — do this before trusting results)
+## Part 6A  Microphone Setup & Calibration (INMP441 I2S)
 
-The single biggest source of wrong predictions is the **microphone input**, not the model. Two
-problems must be fixed on every new mic/site:
+The mic is the single biggest source of wrong predictions. Alertreck uses the **INMP441 I2S MEMS**
+microphone  a digital mic on the Pi's I2S bus: no USB, no analog gain control, and no mains hum.
 
-### 1. Find the mic's ALSA card number
-USB audio devices re-enumerate — the card number **can change between reboots**.
+### 1. Wire it and enable I2S
+Full wiring table, `config.txt` overlay, and the ALSA config are in
+**[../alertrack/deploy/INMP441_SETUP.md](../alertrack/deploy/INMP441_SETUP.md)**. In short:
+
+- Wire VDD→3V3, GND→GND, SCK→GPIO18, WS→GPIO19, SD→GPIO20, L/R→GND (left channel). **3.3 V only.**
+- Add to `/boot/firmware/config.txt`: `dtparam=i2s=on` and `dtoverlay=googlevoicehat-soundcard`, then reboot.
+- `sudo cp alertrack/deploy/asound.conf /etc/asound.conf` so the mic is the ALSA **default**
+  (resampled 48→44.1 kHz, downmixed to mono).
+- `config.py` already has `MIC_DEVICE_INDEX = None` (use the ALSA default).
+
+Confirm the mic card and the SIM808 UART both came up:
 ```bash
-arecord -l        # note "card N:" for "USB PnP Sound Device"
-```
-Use that `N` as `plughw:N,0` below. (If `main.py` can't find the mic after a reboot, the card number
-moved — re-check here and update `MIC_DEVICE_INDEX` in `config.py` if needed.)
-
-### 2. Set the capture gain so nothing clips
-A clipped signal is destroyed *before* the model sees it — gunshots, speech and chainsaw all collapse
-into noise/“vehicle”. Set the gain for the **loudest** sound you expect; EBU normalisation boosts quiet
-sounds back up, so erring low costs nothing.
-
-```bash
-alsamixer
-#  F6 → select "USB PnP Sound Device"
-#  F4 → capture view
-#  lower "Mic" capture; if there's an "Auto Gain Control", press M to turn it OFF
-#  Esc to exit
+arecord -l            # card "sndrpigooglevoi"
+ls -l /dev/ttyAMA0    # SIM808 UART
 ```
 
-**More reliable: set it directly with `amixer`** (control names are stable; `alsamixer`'s
-simple-control names sometimes don't match). For the common PCM2902 USB mic on card 1:
+### 2. Verify capture and level
+The INMP441 is a quiet mic  that is expected. EBU-R128 normalisation rescales loudness before the
+model, so the absolute level does not need tuning (there is no gain control). Just confirm it is alive:
 ```bash
-amixer -c 1 cget numid=4                 # 'Auto Gain Control'  — check state
-amixer -c 1 cset numid=4 off             # AGC OFF (auto-gain drives the mic to clipping)
-amixer -c 1 cset numid=3 4               # 'Mic Capture Volume' low (0–16 scale; ~4 is a good start)
-sudo alsactl store                       # persist across reboots (asks for password)
+# on the Pi: record 5 s (clap/speak during it), then check the level
+arecord -D default -f S16_LE -r 44100 -c 1 -d 5 /tmp/cal.wav
+python3 alertrack/deploy/test_i2s_mic.py        # prints peak / rms, writes test_i2s.wav
 ```
-Re-check `numid` mapping with `amixer -c 1 contents` if the values above don't match your device.
+A working mic shows `peak`/`rms` clearly rising on sound and near-zero on silence. The measured ambient
+floor is ≈ 0.0003 and real events ≈ 0.02.
 
-Verify with a record-and-measure loop — make your loudest test sound during the 3 s:
-```bash
-arecord -D plughw:1,0 -d 3 -f S16_LE -r 44100 -c1 /tmp/cal.wav
-python3 -c "import wave,numpy as np; w=wave.open('/tmp/cal.wav'); x=np.frombuffer(w.readframes(w.getnframes()),dtype=np.int16)/32768; print(f'peak={abs(x).max():.3f} RMS={np.sqrt((x**2).mean()):.4f}')"
+### 3. Onset / silence thresholds (already calibrated for the INMP441)
+Because the INMP441 is quieter than the old USB mic, the absolute energy gates in `config.py` were
+lowered to match its noise floor (the old `0.01` sat *above* real events on this mic and silenced them):
+```python
+SILENCE_THRESHOLD = 0.0015   # skip inference below this raw RMS  (floor ~= 0.0003, events ~= 0.02)
+ONSET_MIN_RMS     = 0.0015   # onset never fires below this absolute floor
+ONSET_TRIGGER_DB  = 7.0      # relative gate over the adaptive floor (mic-agnostic, unchanged)
 ```
-**Target: `peak` < ~0.85 on your loudest source.** `peak=1.000` = clipping → lower the gain more.
-Speech is "peaky" — test it from a realistic ~1 m, not pressed against the mic.
+Nudge `0.0015` up toward `0.002` if idle silence ever triggers, or down to `0.001` if faint/distant
+events are missed. To recalibrate from scratch, record ~10 s of true silence and set the gate a few×
+above the measured per-frame floor.
 
-### Rcord an Audio Sample from the MiC:
-```bash
-ssh -o ConnectTimeout=8 alertreck@alertreck.local \
-  'arecord -D plughw:CARD=sndrpigooglevoi,DEV=0 -f S16_LE -r 44100 -c 1 -d 6 /tmp/alertreck_mic2.wav 2>&1 | tail -2' \
-&& scp -o ConnectTimeout=8 alertreck@alertreck.local:/tmp/alertreck_mic2.wav /Users/cococe/Desktop/alertreck/pi_mic_test2.wav 2>&1 | tail -1
-ls -la /Users/cococe/Desktop/alertreck/pi_mic_test2.wav
-```
-
-### 3. Mains hum (50/60 Hz) — diagnose, then fix at the RIGHT layer
-Field mics pick up mains hum that the clean training audio never had; left in, it reads as
-`threat_vehicle`. Diagnose it after setting the gain:
-```bash
-python3 -c "
-import wave, numpy as np
-w=wave.open('/tmp/cal.wav'); sr=w.getframerate()
-x=np.frombuffer(w.readframes(w.getnframes()),dtype=np.int16).astype(np.float32)/32768
-X=np.abs(np.fft.rfft(x*np.hanning(len(x)))); f=np.fft.rfftfreq(len(x),1/sr); tot=X.sum()+1e-9
-print(f'dominant={f[np.argmax(X)]:.1f}Hz  RMS={np.sqrt((x**2).mean()):.4f}  0-120Hz={100*X[f<120].sum()/tot:.1f}%')
-"
-```
-A quiet room should read **`dominant` ≠ ~50 Hz and idle `RMS` < ~0.02**.
-
-**Decide the fix by severity (this is the lesson from the field build):**
-
-| Symptom | Cause | Fix |
-|---|---|---|
-| `dominant ≈ 50 Hz`, idle RMS ~0.02–0.05, no clipping | mild hum | **Software** — raise `HPF_CUTOFF_HZ` to 110 in `config.py`. The high-pass runs only at serve time, removing hum absent from training (reduces skew, doesn't add it). |
-| `dominant ≈ 50 Hz`, idle RMS **0.3–0.9**, peak hits 1.0 (**clipping**) | **power-borne hum** — the Pi's USB 5 V rail injects mains hum into a cheap USB sound card | **Hardware — software CANNOT fix a clipped input.** See below. |
-
-**Power-borne hum (the severe case): fix the power path.**
-The 50 Hz comb (peaks at 50/150/250/350 Hz) enters through the Pi's USB power. Confirm by
-running the Pi off a **USB-C power bank** (no mains) — if the hum vanishes, it's mains-borne. Permanent fixes, best first:
-1. **USB isolator** (ADUM3160/ADUM4160) between Pi and mic — **but the mic side must be powered
-   from a source other than the Pi** (a separate clean 5 V / charger fed into the isolator's output
-   side). A bus-powered isolator passes the Pi's noisy 5 V through and does nothing.
-2. **Powered USB hub** with its own wall adapter — mic on the hub, not the Pi.
-3. **Clean / well-grounded Pi PSU** (the official 5 V·3 A supply; avoid cheap ungrounded chargers).
-4. **I2S MEMS mic (INMP441)** wired to GPIO — no USB power path at all; immune to this entirely.
-
-Target after the fix: idle **RMS < 0.02** and no 50 Hz dominance. Only then will onset detection
-and classification work — a real chainsaw/gunshot must rise ~10 dB above the noise floor.
+> **No mains hum.** The INMP441 is digital, so the 50/60 Hz mains hum that plagued the USB mic is gone
+>  along with the USB-power-isolator / powered-hub workarounds it required. The `HPF_CUTOFF_HZ`
+> high-pass in `config.py` is now largely redundant (it still harmlessly removes wind rumble); set
+> `HPF_ENABLED = False` and compare field detections if you prefer.
 
 ---
 
-## Part 7 — Enable Auto-Start on Boot
+## Part 7  Enable Auto-Start on Boot
 
 The service file (`alertrack/alertrack.service`) is already configured for the `alertreck` user,
-the `/home/alertreck/alertreck` project path, and the `-m alertrack.main` module entrypoint —
+the `/home/alertreck/alertreck` project path, and the `-m alertrack.main` module entrypoint 
 no editing needed. Just install and enable it:
 
 ```bash
-# On the Pi — install the systemd service
+# On the Pi  install the systemd service
 sudo cp ~/alertreck/alertrack/alertrack.service /etc/systemd/system/
 
 sudo systemctl daemon-reload
@@ -298,7 +257,7 @@ sudo systemctl status alertrack
 
 ---
 
-## Part 8 — Common Commands
+## Part 8  Common Commands
 
 | Task | Command (on Pi) |
 |---|---|
@@ -316,24 +275,24 @@ sudo systemctl status alertrack
 
 ---
 
-## Part 9 — Troubleshooting
+## Part 9  Troubleshooting
 
 | Problem | Fix |
 |---|---|
 | `onnxruntime not found` | Activate venv first: `source ~/alertreck/venv/bin/activate` |
 | `No module named sounddevice` | `sudo apt install -y libportaudio2` then `pip install sounddevice` |
-| `Permission denied` on SSH | SSH not enabled — create empty `ssh` file on boot partition (see Part 3) |
-| `Permission denied` (password rejected) | Wrong **username** — use `alertreck@…`, not `pi@…` (no default `pi` user on Bookworm) |
+| `Permission denied` on SSH | SSH not enabled  create empty `ssh` file on boot partition (see Part 3) |
+| `Permission denied` (password rejected) | Wrong **username**  use `alertreck@…`, not `pi@…` (no default `pi` user on Bookworm) |
 | Pi not found at `alertreck.local` | Find IP via `ping alertreck.local`, then: `ssh alertreck@192.168.1.88` |
 | Model not found error | Re-export on Mac (see Part 5, pass `--model models/custom_cnn/best_model.pt`), then copy to Pi |
-| No audio device found | Check mic is plugged in: `python3 -c "import sounddevice; print(sounddevice.query_devices())"` |
-| Mic stopped working after reboot | USB card number changed — re-run `arecord -l` (Part 6A) |
-| Everything predicts `threat_vehicle` | Mains hum — see Part 6A step 3 (raise `HPF_CUTOFF_HZ`) |
-| Gunshot/speech not detected | Mic is clipping — lower capture gain (Part 6A step 2) |
+| No audio device found | I2S overlay didn't load  check `arecord -l` shows `sndrpigooglevoi`; confirm `dtparam=i2s=on` + `dtoverlay=googlevoicehat-soundcard` in `config.txt`, reboot (Part 6A) |
+| Mic captures silence (peak ≈ 0) | Re-check INMP441 wiring  L/R→GND and the SD/WS/SCK pins; a loose SD wire is the usual cause (`../alertrack/deploy/INMP441_SETUP.md`) |
+| Real events never trigger | INMP441 floor is low  confirm `SILENCE_THRESHOLD` / `ONSET_MIN_RMS = 0.0015` in `config.py` (Part 6A step 3) |
+| `arecord` works but Python is silent | PortAudio opened the wrong device  set `MIC_DEVICE_INDEX = "googlevoicehat"` in `config.py` |
 
 ---
 
-## Part 10 — Connect the SIM808 GPS / GSM Module
+## Part 10  Connect the SIM808 GPS / GSM Module
 
 The SIM808 provides **GPS coordinates** (for geotagging alerts) and **GSM SMS** (to notify rangers),
 both over a single UART serial link. This part covers GPS; SMS uses the same wiring.
@@ -342,12 +301,12 @@ both over a single UART serial link. This part covers GPS; SMS uses the same wir
 
 | SIM808 pin | Pi 4 pin | Notes |
 |---|---|---|
-| `VCC` (module power) | **External 5V / ≥2A supply**, *not* the Pi's 5V | SIM808 draws ~2A bursts when the GSM radio transmits — powering it from the Pi will brown-out and reboot the Pi |
+| `VCC` (module power) | **External 5V / ≥2A supply**, *not* the Pi's 5V | SIM808 draws ~2A bursts when the GSM radio transmits  powering it from the Pi will brown-out and reboot the Pi |
 | `GND` | Pi GND (pin 6) **and** the external supply GND | Common ground is required |
 | `TXD` | Pi `GPIO15 / RXD` (pin 10) | SIM808 TX → Pi RX |
 | `RXD` | Pi `GPIO14 / TXD` (pin 8) | SIM808 RX → Pi TX |
 
-Attach the **GPS antenna** (the active patch antenna) and place it with a clear view of the sky —
+Attach the **GPS antenna** (the active patch antenna) and place it with a clear view of the sky 
 GPS will not get a fix indoors.
 
 ### 2. Enable the Pi's UART
@@ -365,7 +324,7 @@ echo "dtoverlay=disable-bt" | sudo tee -a /boot/firmware/config.txt
 sudo systemctl disable hciuart
 sudo reboot
 ```
-After reboot the SIM808 is on `/dev/ttyAMA0` at 9600 baud — matching `SIM808_PORT` in `config.py`.
+After reboot the SIM808 is on `/dev/ttyAMA0` at 9600 baud  matching `SIM808_PORT` in `config.py`.
 
 ### 3. Verify the serial link and get a GPS fix
 
@@ -396,7 +355,7 @@ python3 -m alertrack.sensors.gps      # prints coordinates once it has a fix
 Edit `alertrack/config.py` on the Pi:
 ```python
 GPS_ENABLED = True            # was False
-NOTIFY_GSM  = True            # was False — enables SMS alerts
+NOTIFY_GSM  = True            # was False  enables SMS alerts
 SIM808_PORT = "/dev/ttyAMA0"  # 9600 baud
 RANGER_PHONE_NUMBERS = [
     "+250795607062",          # ranger number(s) in E.164 format
@@ -436,20 +395,20 @@ and an SMS is sent to each ranger number.
 > time. Don't switch back to a continuous NMEA reader, or SMS sends will fail with "port busy".
 
 > **Tip:** until the antenna has a clear sky view, set `SIMULATE_GPS = True` in `config.py` to test the
-> alert/SMS flow with placeholder coordinates — useful for indoor bench testing.
+> alert/SMS flow with placeholder coordinates  useful for indoor bench testing.
 
 ---
 
 ## Quick Reference
 
 ```
-Pi address     : alertreck.local   (current IP 192.168.1.88 — DHCP, may change on reboot)
+Pi address     : alertreck.local   (current IP 192.168.1.88  DHCP, may change on reboot)
 Pi hostname    : alertreck.local
 SSH user       : alertreck
 Project path   : /home/alertreck/alertreck/
 Model path     : /home/alertreck/alertreck/models/custom_cnn/alertreck_cnn.onnx
 Venv path      : /home/alertreck/alertreck/venv/
 Service name   : alertrack
-Mic            : USB PnP Sound Device (ALSA card varies — check `arecord -l`)
+Mic            : INMP441 I2S MEMS (ALSA card `sndrpigooglevoi`; default via /etc/asound.conf)
 SIM808 (GPS/GSM): /dev/ttyAMA0 @ 9600 baud  (UART; GPS=AT+CGNSPWR/CGNSOUT)
 ```

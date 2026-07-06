@@ -1,4 +1,4 @@
-# Alertreck — System Design Document
+# Alertreck  System Design Document
 
 **Version:** 3.0
 **Last Updated:** June 2026
@@ -8,7 +8,7 @@
 
 ## 1. Overview
 
-Alertreck is an offline-first acoustic threat detection system designed to run continuously on a Raspberry Pi 4 deployed in remote conservation areas. It listens to a USB microphone, classifies 3-second audio windows into one of seven fine-grained classes, and triggers alerts for poaching-related sounds (chainsaws, gunshots, vehicles, human voices, dog barks).
+Alertreck is an offline-first acoustic threat detection system designed to run continuously on a Raspberry Pi 4 deployed in remote conservation areas. It listens to an INMP441 I2S MEMS microphone, classifies 3-second audio windows into one of seven fine-grained classes, and triggers alerts for poaching-related sounds (chainsaws, gunshots, vehicles, human voices, dog barks).
 
 The system trades model size for inference speed and resilience: a 1.2 M-parameter CNN runs in under 1.5 seconds per window on a Pi 4, with no internet dependency.
 
@@ -19,12 +19,12 @@ The system trades model size for inference speed and resilience: a 1.2 M-paramet
 ### Goals
 
 - **Real-time detection** of poaching threats from acoustic signals
-- **Offline operation** — no internet required at inference time
-- **Low cost** — total hardware ≤ USD 80
-- **Per-class alerting** — every threat type detected independently with its own threshold
-- **Evidence preservation** — every alert produces a WAV recording for forensic review
-- **Fault tolerance** — auto-reconnect on microphone or GPS failures
-- **Reproducibility** — fixed seed, hashed preprocessing script, manifest of all parameters
+- **Offline operation**  no internet required at inference time
+- **Low cost**  total hardware ≤ USD 80
+- **Per-class alerting**  every threat type detected independently with its own threshold
+- **Evidence preservation**  every alert produces a WAV recording for forensic review
+- **Fault tolerance**  auto-reconnect on microphone or GPS failures
+- **Reproducibility**  fixed seed, hashed preprocessing script, manifest of all parameters
 
 ### Non-Goals
 
@@ -42,8 +42,8 @@ The system trades model size for inference speed and resilience: a 1.2 M-paramet
 │                         ALERTRECK (Raspberry Pi 4)                   │
 │                                                                      │
 │  ┌─────────────┐   ┌──────────────┐   ┌──────────────┐               │
-│  │  USB Mic    │──▶│  Audio       │──▶│  Mel         │               │
-│  │  44.1 kHz   │   │  Recorder    │   │  Preprocess  │               │
+│  │ INMP441 I2S │──▶│  Audio       │──▶│  Mel         │               │
+│  │  → 44.1 kHz │   │  Recorder    │   │  Preprocess  │               │
 │  └─────────────┘   │  (3 s buf,   │   │  EBU + HPF   │               │
 │                    │  onset-trig) │   └──────┬───────┘               │
 │                    └──────────────┘          │ (1, 128, 301)         │
@@ -115,7 +115,7 @@ alertreck/
 │
 ├── scripts/
 │   ├── audio_extraction/           Per-source data downloaders
-│   ├── audio_preprocessing.py      Stage 2 — windowing + features
+│   ├── audio_preprocessing.py      Stage 2  windowing + features
 │   ├── data_manifest.py            Per-file metadata index
 │   └── export_model.py             PyTorch → ONNX conversion
 │
@@ -123,7 +123,7 @@ alertreck/
     ├── main.py                     Entry point + orchestration
     ├── config.py                   All thresholds, paths, constants
     ├── audio/
-    │   ├── recorder.py             USB mic capture, rolling buffer
+    │   ├── recorder.py             INMP441 I2S capture (ALSA default), rolling buffer
     │   ├── onset.py                Adaptive energy-onset detector (triggers inference)
     │   └── preprocess.py           Mel spectrogram + EBU R128 + hum high-pass
     ├── inference/
@@ -143,7 +143,7 @@ alertreck/
 
 ## 5. Data Pipeline Design
 
-### 5.1 Stage 1 — Data Collection
+### 5.1 Stage 1  Data Collection
 
 Audio is sourced from heterogeneous datasets, each contributing to specific classes:
 
@@ -158,7 +158,7 @@ Audio is sourced from heterogeneous datasets, each contributing to specific clas
 
 A **manifest CSV** (`data/processed/manifest.csv`) records every file's source, duration, sample rate, and class assignment. This supports auditability and removal of contaminated subsets (e.g. horse audio was removed when found to contain human background talking).
 
-### 5.2 Stage 2 — Preprocessing
+### 5.2 Stage 2  Preprocessing
 
 **Script:** `scripts/audio_preprocessing.py`
 
@@ -174,32 +174,36 @@ A **manifest CSV** (`data/processed/manifest.csv`) records every file's source, 
 
 **Reproducibility:** seed = 42 throughout; `script_sha256` hash recorded in `manifest.json` so any change to the script is detectable.
 
-**Split:** stratified 60 / 20 / 20 at the **file level** (all windows of one file stay in one split) — preserves class proportions *and* prevents leakage between overlapping windows. See [AUDIO_PREPROCESSING.md](AUDIO_PREPROCESSING.md) for the full pipeline and curriculum.
+**Split:** stratified 60 / 20 / 20 at the **file level** (all windows of one file stay in one split)  preserves class proportions *and* prevents leakage between overlapping windows. See [AUDIO_PREPROCESSING.md](AUDIO_PREPROCESSING.md) for the full pipeline and curriculum.
 
-> W2V2-L2 does not use these shards — it consumes raw 16 kHz audio through the frozen `wav2vec2-base`
+> W2V2-L2 does not use these shards  it consumes raw 16 kHz audio through the frozen `wav2vec2-base`
 > backbone (notebook `02b`).
 
-### 5.3 Stage 3 — Training (Kaggle T4)
+### 5.3 Stage 3  Training (Kaggle T4)
 
 Each model trains independently on the same NPZ shards (W2V2-L2 on raw-audio embeddings). The test set
 is never augmented, to ensure honest evaluation. Five models span four ML paradigms.
 
+Metrics are on the **leak-free group-aware split** (an earlier file-level split inflated scores to
+≈ 0.92; those figures are retired).
+
 | Model | Paradigm | Status | Test Acc | Macro F1 | AUC |
 |---|---|---|---|---|---|
-| CNN from scratch | Supervised | ✅ **Deployed** | 0.9264 | 0.9166 | — |
-| ProtoNet | Few-shot metric | ✅ Done | **0.9311** | 0.9205 | **0.9938** |
-| W2V2-L2 (frozen transfer) | Out-of-species transfer | ✅ Done | 0.9297 | **0.9210** | 0.9911 |
-| Conv-AE | Unsupervised anomaly | ✅ Done | 0.5147† | — | 0.6033† |
-| OC-SVM | Classical anomaly | ✅ Done | 0.5100† | — | 0.7790† |
+| CNN from scratch | Supervised | ✅ **Deployed** | **0.8263** | **0.8069** | **0.9757** |
+| ProtoNet | Few-shot metric | ✅ Done | 0.8241 | 0.8036 | 0.9748 |
+| W2V2-L2 (frozen transfer) | Out-of-species transfer | ✅ Done | 0.7806 | 0.7626 | 0.9605 |
+| Conv-AE | Unsupervised anomaly | ✅ Done | 0.51† |  | 0.8050† |
+| OC-SVM | Classical anomaly | ✅ Done | 0.51† |  | 0.7192† |
 
 † Conv-AE / OC-SVM are binary anomaly detectors (threat vs background); metrics are binary.
 
-The three discriminative models are statistically tied at the top, all near-perfect on gunshot (F1 ≈
-0.997). The **CNN** is deployed for its small, self-contained footprint. Full analysis:
-[MODEL_COMPARISON.md](MODEL_COMPARISON.md). *(tiny-AST was dropped 2026-06-01 in favour of W2V2-L2 — see
-[ROADMAP.md](ROADMAP.md).)*
+The two task-trained classifiers (CNN ≈ ProtoNet) are statistically tied at the top; frozen-transfer
+W2V2-L2 trails (RQ5). The **CNN** is both the most accurate and the deployed model, for its small,
+self-contained footprint. Among the anomaly detectors the AUC-selected Conv-AE (0.805) now beats the
+OC-SVM (0.719). Full analysis: [MODEL_COMPARISON.md](MODEL_COMPARISON.md). *(tiny-AST was dropped
+2026-06-01 in favour of W2V2-L2  see [ROADMAP.md](ROADMAP.md).)*
 
-### 5.4 Stage 4 — Export
+### 5.4 Stage 4  Export
 
 **Script:** `scripts/export_model.py`
 
@@ -270,7 +274,7 @@ Every fine-grained class has its own configuration in `THREAT_CONFIG`:
 THREAT_CONFIG = {
     "threat_chainsaw":  (0.60, "HIGH",   300),
     "threat_dog":       (0.60, "MEDIUM", 300),
-    "threat_gunshot":   (0.60, "HIGH",    60),  # short cooldown — instantaneous
+    "threat_gunshot":   (0.60, "HIGH",    60),  # short cooldown  instantaneous
     "threat_human":     (0.60, "HIGH",   300),
     "threat_vehicle":   (0.60, "HIGH",   300),
 }
@@ -278,7 +282,7 @@ THREAT_CONFIG = {
 
 Format: `(threshold, level, cooldown_seconds)`.
 
-Background classes (`background_animals`, `background_wind_rain`) are silent — they never trigger alerts regardless of confidence.
+Background classes (`background_animals`, `background_wind_rain`) are silent  they never trigger alerts regardless of confidence.
 
 This design preserves the granularity of the model output. There is no class collapsing; a chainsaw is reported as a chainsaw, not as a generic "THREAT".
 
@@ -436,13 +440,13 @@ The service auto-restarts on crash with a 10-second delay. Logs are written to b
 **Comparing:** supervised CNN, few-shot ProtoNet, frozen out-of-species transfer (W2V2-L2), and two
 anomaly detectors (Conv-AE, OC-SVM).
 **Why:** the capstone evaluates which learning paradigm best suits scarce, domain-shifted acoustic data.
-*(tiny-AST — a fine-tuned audio transformer — was the original transfer arm but was dropped 2026-06-01:
+*(tiny-AST  a fine-tuned audio transformer  was the original transfer arm but was dropped 2026-06-01:
 fine-tuning a transformer on a small corpus overfits under domain shift. A frozen, truncated wav2vec 2.0
 layer-2 embedding is a genuinely distinct paradigm and a better fit. See [ROADMAP.md](ROADMAP.md).)*
 
 ### 9.6 Offline-First Alerting
 
-**Chose:** offline-first GSM/SMS via SIM808, with GPS coordinates — no internet dependency.
+**Chose:** offline-first GSM/SMS via SIM808, with GPS coordinates  no internet dependency.
 **Why:** cellular SMS reaches rangers where data coverage is intermittent. Explainability (Grad-CAM) is
 served by an **off-device dashboard** that syncs detections over the LAN when one is available, keeping
 the Pi itself lean (ONNX-only). Both are implemented (`alertrack/alerts/notifier.py`, `dashboard/`).
@@ -470,9 +474,9 @@ the Pi itself lean (ONNX-only). Both are implemented (`alertrack/alerts/notifier
 |---|---|
 | AudioSet | Google's large-scale dataset of YouTube-sourced audio events |
 | Mel spectrogram | 2D time-frequency representation on the perceptual mel scale |
-| MFCC | Mel-frequency cepstral coefficients — compact timbre features |
-| ONNX | Open Neural Network Exchange — cross-framework model format |
-| RMS | Root mean square — energy / loudness measure of an audio signal |
+| MFCC | Mel-frequency cepstral coefficients  compact timbre features |
+| ONNX | Open Neural Network Exchange  cross-framework model format |
+| RMS | Root mean square  energy / loudness measure of an audio signal |
 | SpecAugment | Spectrogram-domain data augmentation (frequency/time masking) |
 | Stratified split | Train/val/test split that preserves class proportions |
 

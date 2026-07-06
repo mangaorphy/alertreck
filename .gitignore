@@ -99,3 +99,6 @@ META_DATA_CSV
 # Logs
 *.log
 logs/
+
+# cad
+cad/

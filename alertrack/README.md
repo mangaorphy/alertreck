@@ -10,7 +10,7 @@ ALERTRACK is a production-ready edge ML system designed to run 24/7 on Raspberry
 
 - ✅ **Fully Offline**: No internet required - runs completely on device
 - ✅ **Real-time Detection**: Continuous audio monitoring with rolling buffer
-- ✅ **High Accuracy**: ~92% threat classification accuracy
+- ✅ **High Accuracy**: deployed CNN — 0.826 test accuracy / 0.807 macro-F1 (leak-free group-aware split)
 - ✅ **Fault Tolerant**: Auto-reconnect on hardware failures, never crashes
 - ✅ **GPS Integration**: Precise threat location for rapid response
 - ✅ **Evidence Collection**: Saves audio clips for retraining and verification
@@ -29,7 +29,7 @@ ALERTRACK is a production-ready edge ML system designed to run 24/7 on Raspberry
 
 ### Prototype BOM (≤ USD 80)
 - **Raspberry Pi 4 Model B** — 2 GB RAM, quad-core ARM Cortex-A72 @ 1.8 GHz; edge AI inference + alert dispatch
-- **USB microphone** — plug-and-play USB audio, 100 Hz–16 kHz; continuous outdoor audio capture at 44.1 kHz
+- **INMP441 I2S MEMS microphone** — digital I2S (no analog hum), 60 Hz–15 kHz; captured at 48 kHz and resampled to 44.1 kHz. Wiring + ALSA setup: [deploy/INMP441_SETUP.md](deploy/INMP441_SETUP.md)
 - **SIM808 GSM/GPRS/GPS module** — UART serial, built-in GPS receiver; SMS alerts (MTN/Airtel Rwanda) + device GPS coordinates; no data plan required
 - **32 GB Class 10 MicroSD card** — OS, model weights, SQLite event database, evidence audio
 - **Rwanda SIM card** (MTN or Airtel) — prepaid, GSM only; inserted into SIM808

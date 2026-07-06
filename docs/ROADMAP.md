@@ -36,7 +36,7 @@ These are fixed by the approved proposal (May 2026). Deviations require supervis
 
 | Parameter | Value | Justification |
 |---|---|---|
-| Sample rate | 44.1 kHz mono | Captures full chainsaw / vehicle harmonic content up to Nyquist 22.05 kHz; matches USB microphone native rate |
+| Sample rate | 44.1 kHz mono | Captures full chainsaw / vehicle harmonic content up to Nyquist 22.05 kHz; the INMP441 captures at 48 kHz and is resampled to 44.1 kHz to match the training pipeline |
 | Clip length | 3 s, 50 % overlap | Ensures full gunshot transient captured regardless of onset position |
 | Amplitude | RMS-normalised to −23 dBFS (EBU R128) | Removes gain variation across dataset sources |
 | Mel features | 128-bin log-mel, 25 ms window, 10 ms hop, Hann | Input for CNN, ProtoNet, Conv-AE |
@@ -66,7 +66,7 @@ These are fixed by the approved proposal (May 2026). Deviations require supervis
 | Component | Spec | Role | Status |
 |---|---|---|---|
 | Raspberry Pi 4 Model B | 2 GB RAM, quad-core ARM Cortex-A72 @ 1.8 GHz | Edge processing, inference, alert transmission, local event logging | ● in hand · hostname `alertreck.local` (192.168.1.88) |
-| USB microphone | Plug-and-play USB audio, 100 Hz–16 kHz frequency response | Continuous outdoor audio capture at 44.1 kHz mono | ● in hand · USB hum being resolved (gain + powered hub) |
+| INMP441 I2S MEMS microphone | Digital I2S (no analog hum), 60 Hz–15 kHz; L/R→GND left channel | Continuous outdoor capture at 48 kHz, resampled to 44.1 kHz mono | ● deployed · replaced the USB mic, eliminating the mains-hum problem |
 | SIM808 GSM/GPRS/GPS module | Quad-band 850/900/1800/1900 MHz, UART serial, built-in GPS receiver | SMS alert delivery (MTN/Airtel Rwanda, no data plan) + device GPS coordinates | ● in hand |
 | 32 GB Class 10 MicroSD card | Class 10, read ≥ 45 MB/s | OS, model weights, SQLite event database, evidence audio | ● in hand · Pi OS installed |
 | Rwanda SIM card (MTN or Airtel) | Prepaid, GSM only (no data plan required) | Cellular network access for SMS delivery | ● in hand |
@@ -161,16 +161,16 @@ Applied to **all clips** in order. Steps 6a–6e apply to **training folds only*
 
 | Step | Operation | Parameters | Justification |
 |---|---|---|---|
-| 1 | **Resample** | Kaiser-best resampling → 44.1 kHz mono | Full chainsaw/vehicle harmonic content up to 22.05 kHz; matches USB microphone native rate |
+| 1 | **Resample** | Kaiser-best resampling → 44.1 kHz mono | Full chainsaw/vehicle harmonic content up to 22.05 kHz; matches the 44.1 kHz training pipeline (the INMP441 captures at 48 kHz and is resampled on device) |
 | 2 | **Normalise** | RMS amplitude → −23 dBFS (EBU R128) | Removes gain variation across sources; prevents loudness shortcuts |
 | 3 | **Segment** | Class-dependent 3 s windows: continuous classes use a sliding window (1.5 s step, 50 % overlap); impulsive classes (gunshot, dog) use **event-based selection** — windows centred on energy onsets ≥ 8 dB above the clip's own floor | Captures the transient regardless of onset position; for impulsive classes, drops silent windows that blind slicing would mislabel as a threat (reduces false positives) |
 | 4a | **Log-mel spectrogram** | STFT → 128-bin mel filterbank → log; 25 ms window, 10 ms hop, Hann | Input for CNN, ProtoNet, Conv-AE |
 | 4b | **Raw waveform (16 kHz)** | 3 s mono waveform resampled 44.1 → 16 kHz | Native input for the frozen wav2vec 2.0 layer-2 encoder (W2V2-L2 arm); matches wav2vec 2.0 pretraining sample rate (Geldenhuys & Niesler, 2026) |
 | 4c | **MFCC+Δ+ΔΔ** | DCT → delta → delta-delta; 40 coefficients → 120-dim vector per frame | Input for OC-SVM; RBF kernel tractable at this dimensionality |
-| 5 | **USB mic DIR calibration** | Sweep-tone impulse response recorded via deployment USB microphone; convolved with all training clips | Closes device domain gap between downloaded training data and deployment microphone frequency response (Morocutti et al., 2023) |
+| 5 | **Device impulse-response (DIR) calibration** | Sweep-tone impulse response recorded via the deployment microphone; convolved with all training clips | Closes device domain gap between downloaded training data and deployment microphone frequency response (Morocutti et al., 2023) |
 | 6a | **SpecAugment** | Time masking: 2 masks, max 40 frames; frequency masking: 2 masks, max 20 bins | Forces model to learn full spectral shape of threats, not just onset timing (Wang et al., 2021) |
 | 6b | **Compound augmentation** | Randomly sample 2–4 effects from pool below; physical plausibility filter applied | Simulates real compound field conditions per Mega-ASR (Xie et al., 2026) |
-| 6c | **FilterAugment** | Random frequency response curve per clip; magnitude: ±6 dB across random sub-band | Simulates USB microphone frequency response variation across outdoor temperature/humidity (Nam et al., 2022) |
+| 6c | **FilterAugment** | Random frequency response curve per clip; magnitude: ±6 dB across random sub-band | Simulates deployment-microphone frequency-response variation across outdoor temperature/humidity (Nam et al., 2022) |
 | 6d | **Mixup** | Beta distribution β(0.4); inter-class and intra-class pairs | Additional regularisation; improves class boundary generalisation (Zhang et al., 2018) |
 | 6e | **Learnability filter** | Discard augmented clips where Conv-AE reconstruction error exceeds 95th percentile of background distribution | Removes unlearnable hard-negative samples that destabilise training (Mega-ASR WER > 70 % filter principle) |
 | 7 | **Split** | Group-aware 60/20/20 (by parent recording, class-stratified); seed 42; test set locked before augmentation applied to training folds | Held-out test set reflects clean baseline; group-aware assignment prevents recording leakage across splits |
@@ -284,7 +284,7 @@ Ten stages across eight proposal phases. Each stage maps to a proposal section a
    - Step 5: DIR calibration stub (active with `--dir-ir usb_mic_ir.wav`)
    - Steps 6a–6e: SpecAugment, compound aug pool, FilterAugment, mixup utility, learnability filter stub
    - Step 7: 60/20/20 group-aware split (by parent recording, class-stratified), seed 42; test set locked
-2. ◐ USB mic DIR calibration (Step 5) — hardware in place at alertreck.local; hum issue being resolved before final re-run with `--dir-ir`
+2. ◐ Device-IR (DIR) calibration (Step 5) — optional; the INMP441 I2S mic is deployed and the USB mains-hum problem that delayed this is resolved, so a `--dir-ir` re-run with the new mic remains a future refinement, not a blocker
 3. ● All augmentation steps 6a–6d implemented from scratch (numpy + librosa + ffmpeg); 6e stub until Conv-AE trained
 4. ● `.npz` shards written to `data/processed/{mel,mfcc}/{train,val,test,train_aug_A,train_aug_B,train_aug_C}/`
 5. ● `data/processed/manifest.json` and `splits.json` written
@@ -431,7 +431,7 @@ Ten stages across eight proposal phases. Each stage maps to a proposal section a
 - SMS payload format: `ALERTRECK | <class> | Conf: x% | GPS: lat,lon | HH:MM`
 - Network: MTN or Airtel Rwanda GSM (quad-band); no data plan required — SMS only
 - Retry logic: up to 3 attempts with 5 s backoff; log each attempt and outcome to SQLite `AlertLog`
-- Test end-to-end: loudspeaker playback → USB mic → inference → SMS delivered → measure 95th-percentile latency across 100 trials; target < 30 s
+- Test end-to-end: loudspeaker playback → INMP441 mic → inference → SMS delivered → measure 95th-percentile latency across 100 trials; target < 30 s
 
 #### 7c. SQLite event database
 - Implement in [alertrack/storage/logger.py](alertrack/storage/logger.py) and [alertrack/storage/evidence.py](alertrack/storage/evidence.py)
@@ -517,7 +517,7 @@ Ten stages across eight proposal phases. Each stage maps to a proposal section a
 |---|---|---|---|
 | 0 | Design lock-in | ● done | — |
 | 1 | Data engineering | ● done | — |
-| 2 | Preprocessing pipeline | ◐ | Add 16 kHz raw-waveform branch (step 4b) for W2V2-L2 + re-run; re-run with `--dir-ir` once USB mic hum resolved |
+| 2 | Preprocessing pipeline | ● done | 16 kHz raw-waveform branch (step 4b) feeds W2V2-L2; optional `--dir-ir` re-run with the INMP441 is a future refinement |
 | 3a | CNN training | ◐ | Upload shards to Kaggle, run `03a-train-cnn.ipynb` on GPU |
 | 3b | ProtoNet training | ○ | After CNN encoder weights available (Stage 3a) |
 | 4a | W2V2-L2 frozen transfer | ○ | New arm (replaces tiny-AST); needs 16 kHz waveform shards — extract frozen layer-2 embeddings, train linear head |
@@ -555,6 +555,9 @@ Legend: ○ not started · ◐ partial / skeleton exists · ● done
 | 2026-06-24 | Dataset topped up to **11,333 clips** | AudioSet top-up for wind/rain (→ 2,000) and gunshot (→ 3,304); human → 1,242 |
 | 2026-06-25 | **Split leakage found and fixed — switched to group-aware split** | File-level split scattered 568 parent recordings across train/test, inflating `threat_gunshot` F1 to 0.999. New group-aware split (`scripts/grouping.py`, `scripts/regenerate_splits.py`) keeps each recording in one split: 0 leaks. Pre-fix model scores are invalid; full re-shard + retrain required. Honest scores are lower but generalise better on-device |
 | 2026-06-26 | CNN class weights tempered (raw inverse-freq → sqrt) | Raw inverse-frequency (6.6× spread) stacked on focal-γ over-weighted rare classes; the model over-predicted dog/vehicle (high recall, low precision). sqrt weighting (~2.6× spread) rebalances precision/recall |
+| 2026-06-28 | **Anomaly detectors re-selected on validation detection AUC** | Conv-AE/OC-SVM hyperparameters *and* checkpoint now chosen by background-vs-threat val AUC (Optuna for Conv-AE, exhaustive grid for OC-SVM), not a label-free proxy. Conv-AE jumped 0.60 → 0.805 binary AUC and now detects gunshot (AUC 0.839), overtaking OC-SVM (0.719) |
+| 2026-06-29 | **All five models trained and evaluated on the leak-free split** | Final test scores: CNN 0.807 macro-F1 (deployed) ≈ ProtoNet 0.804 > W2V2-L2 0.763; Conv-AE 0.805 > OC-SVM 0.719 binary AUC. Full analysis in `MODEL_COMPARISON.md` |
+| 2026-06-30 | **USB mic replaced by INMP441 I2S MEMS mic** | Digital I2S removes the mains-hum problem entirely (no analog power path). Captures 48 kHz → resampled to 44.1 kHz; onset/silence gates recalibrated to the quieter floor (`SILENCE_THRESHOLD`/`ONSET_MIN_RMS` 0.01 → 0.0015). Field enclosure (Pi + SIM808) CAD added under `cad/`. Setup: `alertrack/deploy/INMP441_SETUP.md` |
 
 ---
 
@@ -570,6 +573,6 @@ Legend: ○ not started · ◐ partial / skeleton exists · ● done
 - Stage 2 must emit the **16 kHz raw-waveform shards (step 4b)** before Stage 4a (W2V2-L2) can extract frozen layer-2 embeddings — new requirement from the updated proposal
 - Stage 3b (ProtoNet) cannot start until Stage 3a (CNN) produces `best_model.pt` — encoder weights are shared
 - Stage 4b (Conv-AE) trains independently on background-class audio; unlocks learnability filter (step 6e) for a future preprocessing re-run
-- DIR calibration (step 5) pending USB mic hum fix — resolve via powered USB hub or gain reduction in `alsamixer`; re-run preprocessing with `--dir-ir usb_mic_ir.wav` before final evaluation
+- DIR calibration (step 5) is optional and de-prioritised — the INMP441 I2S mic resolved the mains-hum problem that originally motivated tighter device calibration; a `--dir-ir` re-run with the new mic remains a possible future refinement, not a blocker
 
-**Hardware:** All five components in hand. Pi at `alertreck.local` (192.168.1.88), SSH accessible. SIM808 wiring to Pi UART pending Stage 7. Ranger phone numbers not yet added to `alertrack/config.py` (`RANGER_PHONE_NUMBERS`).
+**Hardware:** All components deployed. Pi at `alertreck.local`, SSH accessible. INMP441 I2S mic wired to GPIO and captured via ALSA; SIM808 on the hardware UART (`/dev/ttyAMA0`); 32 GB SD and Rwanda SIM confirmed. Field enclosure (Pi + SIM808) modelled in `cad/`.
