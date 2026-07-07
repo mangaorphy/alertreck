@@ -9,6 +9,10 @@ It is also a comparative research study: **five models across four machine-learn
 trained on the same data and benchmarked, then the best edge candidate is deployed with a live
 **Grad-CAM explainability dashboard**.
 
+<p align="center">
+  <img src="docs/img/assembled_device.jpeg" alt="Assembled Alertreck device — Raspberry Pi 4, INMP441 mic and SIM808 GSM/GPS in the enclosure" width="600">
+</p>
+
 **Repository:** <https://github.com/mangaorphy/alertreck>
 
 ```bash
@@ -62,8 +66,11 @@ everything below is in the **[demo video](https://drive.google.com/file/d/1CwxBU
 
 **System test ; live threat → SMS**
 
-![Live alert to SMS](docs/img/live-alert-sms.png)
-*Capture: split screen ; terminal firing `[ALERT] threat_gunshot conf=0.87` + GPS fix on the left, the ranger phone receiving the SMS on the right (the "money shot").*
+<p align="center">
+  <img src="docs/img/phone_sms.jpeg" alt="Ranger phone receiving a GPS-tagged threat SMS alert from Alertreck" width="320">
+</p>
+
+*A detected threat fires a GPS-tagged SMS to the ranger phone within seconds — class, confidence, coordinates, and timestamp.*
 
 ### 1b. Functionality with different data values
 
@@ -201,6 +208,12 @@ report notebook, or the dashboard.
 | Microphone | INMP441 I2S MEMS mic (digital, no analog hum) |
 | Alert module | SIM808 GSM/GPS over UART |
 | Deployment | Offline-first; SMS/GPRS alert with GPS coordinates |
+
+### System architecture
+
+<p align="center">
+  <img src="docs/img/system_architecture.svg" alt="Alertreck system architecture — audio capture, onset detection, CNN inference, decision engine, and GSM/GPS alerting" width="800">
+</p>
 
 ---
 

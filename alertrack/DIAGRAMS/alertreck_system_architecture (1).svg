@@ -1,0 +1,221 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1700" height="1190" viewBox="0 0 1700 1190" xmlns="http://www.w3.org/2000/svg" font-family="Helvetica, Arial, sans-serif">
+
+  <!-- background -->
+  <rect x="0" y="0" width="1700" height="1190" fill="#FFFFFF"/>
+
+  <!-- ══════════ TITLE ══════════ -->
+  <text x="850" y="52" text-anchor="middle" font-size="40" font-weight="bold" fill="#111111">Alertreck System Architecture</text>
+  <text x="850" y="92" text-anchor="middle" font-size="24" font-style="italic" fill="#333333">Offline Edge AI Acoustic Threat Detection to GSM SMS Gateway</text>
+
+  <!-- ══════════ DEAD ZONE (left, red dashed) ══════════ -->
+  <rect x="40" y="140" width="1010" height="800" rx="28" fill="#FDF1EE" stroke="#C0392B" stroke-width="2.5" stroke-dasharray="10,7"/>
+  <text x="545" y="170" text-anchor="middle" font-size="24" font-weight="bold" fill="#A93226">Remote National Park (No Internet — Dead Zone)</text>
+
+  <!-- ══════════ GSM COVERAGE ZONE (right, green dashed) ══════════ -->
+  <rect x="1170" y="190" width="500" height="660" rx="28" fill="#F0F7F0" stroke="#1E8449" stroke-width="2.5" stroke-dasharray="10,7"/>
+  <text x="1420" y="176" text-anchor="middle" font-size="24" font-weight="bold" fill="#1E8449">GSM Coverage Zone</text>
+
+  <!-- ─────────── Acoustic Threat Sources box ─────────── -->
+  <rect x="70" y="300" width="230" height="300" rx="14" fill="#FFFFFF" stroke="#2E4A7A" stroke-width="2"/>
+  <text x="185" y="332" text-anchor="middle" font-size="19" font-weight="bold" fill="#1B4F9C">Acoustic Threat</text>
+  <text x="185" y="354" text-anchor="middle" font-size="19" font-weight="bold" fill="#1B4F9C">Sources</text>
+
+  <!-- speaker/sound icon -->
+  <g transform="translate(150,375)">
+    <polygon points="0,18 16,18 34,2 34,50 16,34 0,34" fill="#333333"/>
+    <path d="M 44 12 Q 54 26 44 40" fill="none" stroke="#333333" stroke-width="3.5" stroke-linecap="round"/>
+    <path d="M 54 4 Q 70 26 54 48" fill="none" stroke="#333333" stroke-width="3.5" stroke-linecap="round"/>
+  </g>
+
+  <text x="92" y="470" font-size="15" fill="#222222">• threat_gunshot</text>
+  <text x="92" y="493" font-size="15" fill="#222222">• threat_chainsaw</text>
+  <text x="92" y="516" font-size="15" fill="#222222">• threat_vehicle</text>
+  <text x="92" y="539" font-size="15" fill="#222222">• threat_human</text>
+  <text x="92" y="562" font-size="15" fill="#222222">• threat_dog</text>
+  <text x="92" y="585" font-size="15" fill="#666666">• background classes ×2</text>
+
+  <!-- sound wave arrow to node -->
+  <path d="M 305 450 L 375 450" fill="none" stroke="#7F8C8D" stroke-width="3" stroke-dasharray="4,5" marker-end="url(#arrGrey)"/>
+  <text x="340" y="435" text-anchor="middle" font-size="13" fill="#7F8C8D" font-style="italic">sound</text>
+
+  <!-- ─────────── Alertreck Edge Node box ─────────── -->
+  <rect x="385" y="230" width="320" height="470" rx="14" fill="#FFFFFF" stroke="#2E4A7A" stroke-width="2"/>
+  <text x="545" y="262" text-anchor="middle" font-size="20" font-weight="bold" fill="#1B4F9C">Alertreck Edge Node</text>
+  <text x="545" y="284" text-anchor="middle" font-size="15" fill="#555555">(single unit, fully offline)</text>
+
+  <!-- Pi board icon -->
+  <g transform="translate(445,300)">
+    <rect x="0" y="0" width="200" height="95" rx="8" fill="#1E7145" stroke="#145A32" stroke-width="2"/>
+    <rect x="12" y="10" width="60" height="16" rx="2" fill="#BDC3C7"/>
+    <rect x="12" y="34" width="60" height="16" rx="2" fill="#BDC3C7"/>
+    <rect x="150" y="10" width="38" height="40" rx="3" fill="#95A5A6"/>
+    <rect x="90" y="26" width="38" height="38" rx="3" fill="#2C3E50"/>
+    <circle cx="20" cy="78" r="5" fill="#F4D03F"/>
+    <circle cx="38" cy="78" r="5" fill="#E74C3C"/>
+    <text x="100" y="88" text-anchor="middle" font-size="11" fill="#EAFAF1" font-weight="bold">Raspberry Pi 4 · 2 GB</text>
+  </g>
+
+  <!-- INMP441 mic icon -->
+  <g transform="translate(415,415)">
+    <rect x="0" y="0" width="52" height="40" rx="6" fill="#34495E"/>
+    <circle cx="26" cy="20" r="9" fill="#111111" stroke="#85929E" stroke-width="2"/>
+    <text x="26" y="55" text-anchor="middle" font-size="11" fill="#333333" font-weight="bold">INMP441</text>
+  </g>
+
+  <text x="490" y="432" font-size="15" fill="#222222">• INMP441 I2S MEMS mic</text>
+  <text x="490" y="454" font-size="14" fill="#666666">   (digital, 61 dB SNR, GPIO)</text>
+
+  <text x="407" y="495" font-size="15" fill="#222222">• TFLite INT8 inference — winning model</text>
+  <text x="407" y="518" font-size="15" fill="#222222">• VAD + log-mel / MFCC features</text>
+  <text x="407" y="541" font-size="15" fill="#222222">• Grad-CAM explainability (XAI)</text>
+  <text x="407" y="564" font-size="15" fill="#222222">• SQLite local event log</text>
+  <text x="407" y="587" font-size="15" fill="#222222">• Flask LAN dashboard (port 5000)</text>
+  <text x="407" y="610" font-size="15" fill="#222222">• systemd audio daemon 24/7</text>
+  <text x="407" y="633" font-size="15" fill="#222222">• Solar + LiFePO4 powered</text>
+  <text x="407" y="662" font-size="14" font-weight="bold" fill="#A93226">• Zero internet dependency</text>
+
+  <!-- I2S label between mic and node internals -->
+  <path d="M 545 700 L 545 745" fill="none" stroke="#E67E22" stroke-width="2.5" stroke-dasharray="7,5" marker-end="url(#arrOrange)"/>
+
+  <!-- ─────────── Admin / dashboard box (below node) ─────────── -->
+  <rect x="420" y="750" width="250" height="150" rx="14" fill="#FFFDF2" stroke="#B7950B" stroke-width="2"/>
+  <text x="545" y="780" text-anchor="middle" font-size="18" font-weight="bold" fill="#7D6608">System Admin (LAN)</text>
+  <text x="440" y="810" font-size="14" fill="#222222">• Browser on local network</text>
+  <text x="440" y="832" font-size="14" fill="#222222">• Live scores + Grad-CAM view</text>
+  <text x="440" y="854" font-size="14" fill="#222222">• Alert history + audio playback</text>
+  <text x="440" y="876" font-size="14" fill="#222222">• Threshold tuning per class</text>
+
+  <!-- ─────────── SIM808 box ─────────── -->
+  <rect x="770" y="300" width="250" height="400" rx="14" fill="#FFFFFF" stroke="#2E4A7A" stroke-width="2"/>
+  <text x="895" y="332" text-anchor="middle" font-size="19" font-weight="bold" fill="#1B4F9C">SIM808 GSM/GPS</text>
+  <text x="895" y="354" text-anchor="middle" font-size="19" font-weight="bold" fill="#1B4F9C">Module</text>
+
+  <!-- SIM808 board icon -->
+  <g transform="translate(820,370)">
+    <rect x="0" y="0" width="150" height="80" rx="8" fill="#1A5276" stroke="#154360" stroke-width="2"/>
+    <rect x="15" y="14" width="45" height="35" rx="3" fill="#E74C3C"/>
+    <text x="37" y="36" text-anchor="middle" font-size="10" fill="#FFFFFF" font-weight="bold">SIM808</text>
+    <circle cx="115" cy="20" r="9" fill="#D4AC0D" stroke="#9A7D0A" stroke-width="2"/>
+    <circle cx="115" cy="52" r="9" fill="#D4AC0D" stroke="#9A7D0A" stroke-width="2"/>
+    <rect x="80" y="60" width="30" height="12" rx="2" fill="#BDC3C7"/>
+  </g>
+
+  <text x="790" y="485" font-size="15" fill="#222222">• GPS fix via AT+CGNSINF</text>
+  <text x="790" y="508" font-size="15" fill="#222222">• SMS send via AT+CMGS</text>
+  <text x="790" y="531" font-size="15" fill="#222222">• Quad-band 850–1900 MHz</text>
+  <text x="790" y="554" font-size="15" fill="#222222">• UART serial to Pi GPIO</text>
+  <text x="790" y="577" font-size="15" fill="#222222">• 4.1 V buck converter feed</text>
+  <text x="790" y="600" font-size="15" fill="#222222">• 1000 µF spike capacitor</text>
+  <text x="790" y="623" font-size="15" fill="#222222">• External GSM + GPS antennas</text>
+  <text x="790" y="652" font-size="14" font-weight="bold" fill="#1E8449">• SMS-only — no data plan</text>
+
+  <!-- UART arrow node -> SIM808 -->
+  <path d="M 710 450 L 763 450" fill="none" stroke="#8E44AD" stroke-width="3" marker-end="url(#arrPurple)"/>
+  <text x="737" y="435" text-anchor="middle" font-size="13" fill="#8E44AD" font-weight="bold">UART / AT</text>
+
+  <!-- GPS satellite hint -->
+  <g transform="translate(880,215)">
+    <rect x="14" y="10" width="26" height="18" rx="3" fill="#5D6D7E"/>
+    <rect x="0" y="13" width="12" height="12" fill="#85C1E9"/>
+    <rect x="42" y="13" width="12" height="12" fill="#85C1E9"/>
+    <text x="28" y="48" text-anchor="middle" font-size="12" fill="#5D6D7E">GPS satellites</text>
+  </g>
+  <path d="M 908 262 L 900 300" fill="none" stroke="#5D6D7E" stroke-width="2" stroke-dasharray="3,4" marker-end="url(#arrGreySmall)"/>
+
+  <!-- ─────────── GSM SMS arrow crossing zones ─────────── -->
+  <path d="M 1025 470 L 1240 470" fill="none" stroke="#1E8449" stroke-width="4.5" marker-end="url(#arrGreen)"/>
+  <text x="1130" y="452" text-anchor="middle" font-size="15" font-weight="bold" fill="#1E8449">GPS-tagged SMS</text>
+
+  <!-- GSM tower icon -->
+  <g transform="translate(1255,380)">
+    <polygon points="35,0 42,110 28,110" fill="#333333"/>
+    <line x1="35" y1="18" x2="10" y2="110" stroke="#333333" stroke-width="4"/>
+    <line x1="35" y1="18" x2="60" y2="110" stroke="#333333" stroke-width="4"/>
+    <line x1="18" y1="75" x2="52" y2="75" stroke="#333333" stroke-width="3"/>
+    <line x1="24" y1="45" x2="46" y2="45" stroke="#333333" stroke-width="3"/>
+    <path d="M 14 8 Q 0 22 14 36" fill="none" stroke="#333333" stroke-width="3.5" stroke-linecap="round"/>
+    <path d="M 56 8 Q 70 22 56 36" fill="none" stroke="#333333" stroke-width="3.5" stroke-linecap="round"/>
+    <path d="M 4 0 Q -14 22 4 44" fill="none" stroke="#333333" stroke-width="3.5" stroke-linecap="round"/>
+    <path d="M 66 0 Q 84 22 66 44" fill="none" stroke="#333333" stroke-width="3.5" stroke-linecap="round"/>
+  </g>
+  <text x="1290" y="520" text-anchor="middle" font-size="17" font-weight="bold" fill="#1E8449">GSM Network</text>
+  <text x="1290" y="542" text-anchor="middle" font-size="14" fill="#1E8449">(MTN / Airtel Rwanda)</text>
+
+  <!-- arrow tower -> ranger -->
+  <path d="M 1350 470 L 1438 470" fill="none" stroke="#1E8449" stroke-width="4.5" marker-end="url(#arrGreen)"/>
+
+  <!-- ─────────── Ranger recipient box ─────────── -->
+  <rect x="1450" y="360" width="195" height="290" rx="14" fill="#FFFFFF" stroke="#2E4A7A" stroke-width="2"/>
+  <text x="1547" y="392" text-anchor="middle" font-size="19" font-weight="bold" fill="#1B4F9C">Field Ranger</text>
+  <text x="1547" y="414" text-anchor="middle" font-size="14" fill="#555555">(any GSM phone)</text>
+
+  <!-- phone icon -->
+  <g transform="translate(1512,430)">
+    <rect x="0" y="0" width="70" height="115" rx="10" fill="#FFFFFF" stroke="#333333" stroke-width="4"/>
+    <rect x="8" y="14" width="54" height="76" rx="3" fill="#EBF5FB"/>
+    <circle cx="35" cy="102" r="6" fill="none" stroke="#333333" stroke-width="2.5"/>
+    <rect x="14" y="22" width="46" height="24" rx="4" fill="#27AE60"/>
+    <text x="37" y="38" text-anchor="middle" font-size="9" fill="#FFFFFF" font-weight="bold">ALERTRECK</text>
+  </g>
+
+  <text x="1466" y="578" font-size="14" fill="#222222">• Receive SMS alert</text>
+  <text x="1466" y="600" font-size="14" fill="#222222">• Class + confidence</text>
+  <text x="1466" y="622" font-size="14" fill="#222222">• GPS coords + time</text>
+
+  <!-- ─────────── Legend ─────────── -->
+  <rect x="70" y="640" width="280" height="270" rx="14" fill="#FFFFFF" stroke="#95A5A6" stroke-width="1.8"/>
+  <text x="210" y="672" text-anchor="middle" font-size="18" font-weight="bold" fill="#222222">Legend</text>
+
+  <path d="M 92 700 L 152 700" stroke="#7F8C8D" stroke-width="3" stroke-dasharray="4,5" marker-end="url(#arrGrey)"/>
+  <text x="162" y="705" font-size="14" fill="#222222">Acoustic sound waves</text>
+
+  <path d="M 92 738 L 152 738" stroke="#E67E22" stroke-width="2.5" stroke-dasharray="7,5" marker-end="url(#arrOrange)"/>
+  <text x="162" y="743" font-size="14" fill="#222222">I2S digital audio (GPIO)</text>
+
+  <path d="M 92 776 L 152 776" stroke="#8E44AD" stroke-width="3" marker-end="url(#arrPurple)"/>
+  <text x="162" y="781" font-size="14" fill="#222222">UART serial / AT commands</text>
+
+  <path d="M 92 814 L 152 814" stroke="#1E8449" stroke-width="4" marker-end="url(#arrGreen)"/>
+  <text x="162" y="819" font-size="14" fill="#222222">GSM SMS cellular link</text>
+
+  <path d="M 92 852 L 152 852" stroke="#B7950B" stroke-width="2.5" stroke-dasharray="3,4" marker-end="url(#arrGold)"/>
+  <text x="162" y="857" font-size="14" fill="#222222">Local network (LAN only)</text>
+
+  <path d="M 92 890 L 152 890" stroke="#5D6D7E" stroke-width="2" stroke-dasharray="3,4" marker-end="url(#arrGreySmall)"/>
+  <text x="162" y="895" font-size="14" fill="#222222">GPS satellite signal</text>
+
+  <!-- LAN link node -> admin -->
+  <path d="M 545 700 L 545 745" fill="none" stroke="#B7950B" stroke-width="2.5" stroke-dasharray="3,4"/>
+
+  <!-- ══════════ FIGURE CAPTION ══════════ -->
+  <text x="850" y="985" text-anchor="middle" font-size="24" font-weight="bold" fill="#111111">Figure 1: Alertreck System Architecture — Offline Park Edge AI to GSM Network</text>
+
+  <!-- ══════════ PATH SUMMARY BOX ══════════ -->
+  <rect x="230" y="1015" width="1240" height="130" rx="12" fill="#FFFFFF" stroke="#95A5A6" stroke-width="1.8" stroke-dasharray="6,5"/>
+  <text x="260" y="1052" font-size="17" fill="#111111"><tspan font-weight="bold">Alert Path:</tspan>  Threat sound → INMP441 (I2S) → VAD + Features → TFLite INT8 Inference → GPS Fix (AT+CGNSINF) → SMS (AT+CMGS) → GSM Network → Ranger</text>
+  <text x="260" y="1090" font-size="17" fill="#111111"><tspan font-weight="bold">Admin Path:</tspan>  Detection event → Grad-CAM heatmap + SQLite log → Flask LAN Dashboard (port 5000) → Admin browser on local network</text>
+  <text x="260" y="1128" font-size="17" fill="#111111"><tspan font-weight="bold">Constraint:</tspan>  End-to-end latency &lt; 30 s · Zero internet at any stage · Sub-USD 80 hardware · Solar powered continuous operation</text>
+
+  <!-- ══════════ ARROW MARKER DEFS ══════════ -->
+  <defs>
+    <marker id="arrGreen" markerWidth="10" markerHeight="10" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L9,4 L0,8 Z" fill="#1E8449"/>
+    </marker>
+    <marker id="arrGrey" markerWidth="10" markerHeight="10" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L9,4 L0,8 Z" fill="#7F8C8D"/>
+    </marker>
+    <marker id="arrGreySmall" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#5D6D7E"/>
+    </marker>
+    <marker id="arrPurple" markerWidth="10" markerHeight="10" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L9,4 L0,8 Z" fill="#8E44AD"/>
+    </marker>
+    <marker id="arrOrange" markerWidth="10" markerHeight="10" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L9,4 L0,8 Z" fill="#E67E22"/>
+    </marker>
+    <marker id="arrGold" markerWidth="10" markerHeight="10" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L9,4 L0,8 Z" fill="#B7950B"/>
+    </marker>
+  </defs>
+</svg>
