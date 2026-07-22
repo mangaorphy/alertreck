@@ -1,88 +1,137 @@
 # Alertreck — Model Design Overview
 
-**Version:** 1.1  
-**Last Updated:** 2026-06-30  
+**Version:** 2.0 (as-built)
+**Last Updated:** 2026-07-09
 **Author:** Orpheus Manga
+
+> This document describes the models **as implemented and evaluated**, not as
+> originally proposed. All architecture details are verified against the training
+> notebooks (`notebooks/03a`–`04c`) and `models/*/results.json`; all latency and
+> resource figures are measured on the deployment Raspberry Pi 4.
 
 ---
 
 ## 1. Four-Paradigm Framework
 
-Alertreck trains five models across four learning paradigms on identical data to answer whether paradigm choice matters for acoustic threat detection on an edge device.
+Alertreck trains **five models across four learning paradigms** on identical data
+to answer whether paradigm choice matters for acoustic threat detection on an edge
+device.
 
-| # | Model | Paradigm | Input | Framework |
-|---|---|---|---|---|
-| 1 | CNN | Supervised | 128-bin log-mel (128 × 301) | PyTorch |
-| 2 | ProtoNet | Metric learning | 128-bin log-mel (128 × 301) | PyTorch |
-| 3 | W2V2-L2 | Frozen transfer | Raw waveform @ 16 kHz | HuggingFace + torchaudio |
-| 4 | Conv-AE | Unsupervised anomaly | 128-bin log-mel (128 × 301) | PyTorch |
-| 5 | OC-SVM | Classical one-class | 120-dim MFCC+Δ+ΔΔ | scikit-learn |
+| # | Model | Paradigm | Input | Framework | Role |
+|---|---|---|---|---|---|
+| 1 | CNN | Supervised classification | 128-bin log-mel (128 × 301) | PyTorch | **Deployed** (primary) |
+| 2 | ProtoNet | Metric learning (few-shot) | 128-bin log-mel (128 × 301) | PyTorch | Accuracy benchmark |
+| 3 | W2V2-L2 | Frozen transfer | Raw waveform @ 16 kHz | HuggingFace + torchaudio | Benchmark (RQ5) |
+| 4 | Conv-AE | Unsupervised anomaly | 128-bin log-mel (128 × 301) | PyTorch | Anomaly detector |
+| 5 | OC-SVM | Classical one-class | 120-dim MFCC+Δ+ΔΔ | scikit-learn | Confirmatory (lightest) |
 
-**Seven-class taxonomy:** `background_animals`, `background_wind_rain`, `threat_gunshot`, `threat_chainsaw`, `threat_vehicle`, `threat_human`, `threat_dog`
+**Seven-class taxonomy:** `background_animals`, `background_wind_rain`,
+`threat_chainsaw`, `threat_dog`, `threat_gunshot`, `threat_human`, `threat_vehicle`
+(labels 0–6). Background classes never alert; the five threat classes trigger alerts.
 
-**Shared training data:** 8,907 clips, stratified 60/20/20 split, seed 42, test set locked.
+**Shared training data:** 11,333 raw audio files (≈ 17.5 h) standardized into
+**26,623 three-second windows**, split **group-aware 60/20/20** by parent recording
+(seed 42) so segments of one recording never span train/test. Window counts:
+train 14,854 · val 5,844 · test 5,925.
 
 ---
 
-## 2. Model 1 — CNN (Supervised Baseline)
+## 2. Model 1 — CNN (Supervised, Deployed)
 
 ### 2.1 Role
 
-Primary production model deployed on Pi 4. Establishes the supervised upper bound for the comparison study.
+Primary production model deployed on the Pi 4. Establishes the supervised upper
+bound for the comparison and is the smallest self-contained graph, which is why it
+is the deployment pick over the statistically-tied ProtoNet.
 
 ### 2.2 Input
 
 ```
 128-bin log-mel spectrogram
-  window : 25 ms (Hann), hop : 10 ms
-  shape  : (1, 128, 301)   — (channels, mel_bins, time_frames)
-  origin : data/processed/mel/{split}/
+  sample rate : 44.1 kHz mono
+  clip        : 3 s (132,300 samples)
+  window      : 25 ms Hann (win_length 1102) · hop 10 ms (441) · n_fft 2048
+  scaling     : power_to_db(ref=max)
+  shape       : (1, 128, 301)   — (channels, mel_bins, time_frames)
+  origin      : data/processed/mel/{split}/shard_NNN.npz
 ```
 
-### 2.3 Architecture
+### 2.3 Architecture (`AudioCNN` — verified against `notebooks/03a-train-cnn.ipynb`)
+
+Four VGG-style convolutional blocks (**two 3×3 convs each**), global average
+pooling, then a two-layer classifier head.
 
 ```
-Input (1, 128, 301)
-  │
-  ├── Block 1: Conv2D(32, 3×3) → BN → ReLU → MaxPool(2×2) → Dropout(0.25)
-  ├── Block 2: Conv2D(64, 3×3) → BN → ReLU → MaxPool(2×2) → Dropout(0.25)
-  ├── Block 3: Conv2D(128, 3×3) → BN → ReLU → MaxPool(2×2) → Dropout(0.25)
-  ├── Block 4: Conv2D(256, 3×3) → BN → ReLU → GlobalAvgPool
-  │
-  ├── Dense(512) → ReLU → Dropout(0.5)
-  └── Dense(7) → Softmax
+Input (1 × 128 × 301)
+   │
+   ▼
+ConvBlock 1:  Conv2d 1→32 (3×3, pad1, no bias) → BN → ReLU
+              Conv2d 32→32 (3×3, pad1, no bias) → BN → ReLU
+              MaxPool 2×2 → Dropout2d(0.2)                     → (32 × 64 × 150)
+   ▼
+ConvBlock 2:  Conv2d 32→64 ×2 (→BN→ReLU) → MaxPool → Dropout   → (64 × 32 × 75)
+   ▼
+ConvBlock 3:  Conv2d 64→128 ×2 (→BN→ReLU) → MaxPool → Dropout  → (128 × 16 × 37)
+   ▼
+ConvBlock 4:  Conv2d 128→256 ×2 (→BN→ReLU) → MaxPool → Dropout → (256 × 8 × 18)
+   ▼
+AdaptiveAvgPool2d(1×1)                                          → (256)
+   ▼
+Classifier:   Flatten → Linear(256→128) → ReLU → Dropout(0.5) → Linear(128→7)
+   ▼
+7 logits → Softmax (at inference)
 ```
 
-**Parameters:** ~1.2 M  
-**Receptive field:** captures ~300 ms spectro-temporal patterns per layer stack.
+| Property | Value |
+|---|---|
+| Total parameters | **1,206,439** (~1.2 M) |
+| Conv per block | 2 (3×3, padding 1, bias-free — BatchNorm supplies the shift) |
+| Channel progression | 1 → 32 → 64 → 128 → 256 |
+| Bridge | `AdaptiveAvgPool2d((1,1))` — makes the head input-size agnostic |
+| Head | `Linear(256→128) → ReLU → Dropout(0.5) → Linear(128→7)` |
 
-### 2.4 Training
+The `encode()` method returns the 256-dim pre-classifier embedding; ProtoNet reuses
+it (§3), so the two models share one backbone and the comparison is apples-to-apples.
+
+### 2.4 Training (verified from `results.json` → `best_config`)
 
 | Setting | Value |
 |---|---|
-| Loss | Focal loss (γ = 2, α = inverse class frequency) |
-| Optimiser | Adam (lr = 1e-3, weight decay = 1e-4) |
-| Scheduler | CosineAnnealingLR (T_max = 50 epochs) |
-| Batch size | 64 |
-| Early stopping | patience = 10 on val F1 |
-| Curriculum | Phase A (≥15 dB) → Phase B (10–15 dB) → Phase C (5–10 dB SNR) |
+| Loss | **Focal loss** (γ = 2.0, α = per-class weights) |
+| Optimiser | **AdamW** (lr = 1e-3, weight_decay = 1e-4) |
+| Scheduler | **CosineAnnealingLR** (T_max = epochs, η_min = 1e-6) |
+| Batch size | 256 |
+| Dropout | conv 0.2, fc 0.5 |
+| Curriculum | Phase A (≥15 dB) → B (10–15 dB) → C (5–10 dB SNR) |
 
-Focal loss suppresses the large background class gradient so the model learns the rarer threat classes properly.
+Focal loss (γ) down-weights easy, well-classified windows so the model focuses on
+hard examples; the per-class α weights counter class imbalance. Together they target
+the rarest, hardest threats (vehicle, dog) — see §7.
 
 ### 2.5 Augmentation (training only)
 
-SpecAugment (freq/time masking), FilterAugment (random EQ), Mixup (α = 0.4), compound augmentation pipeline. Applied to mel shards before batching.
+Three-phase compound curriculum applied at preprocessing: waveform effects
+(noise, RIR, lowpass, MP3, gain, clip), then spectrogram-level SpecAugment
+(time/freq masks) and FilterAugment (±6 dB random EQ); Mixup (α = 0.4) is applied in
+the DataLoader. Full detail: `docs/AUDIO_PREPROCESSING.md`.
 
 ### 2.6 Deployment
 
 ```
-best_model.pt → export_model.py → alertreck_cnn.onnx (fp32, opset 17, dynamic batch + frames)
-                                     ↓
-                             ONNX Runtime on Pi 4 (CPU)
-                               inference latency < 1.5 s / window
+best_model.pt → scripts/export_model.py → alertreck_cnn.onnx
+  fp32, opset 17, dynamic batch axis, input "mel_spectrogram" [batch,1,128,301]
+  size: 4.6 MB
+       ↓
+  ONNX Runtime on Pi 4 (CPU, no PyTorch)
 ```
 
-Grad-CAM is applied to the last conv block at eval time for qualitative explainability.
+**Measured inference latency (Pi 4, CPU, this ONNX graph):**
+min 154 ms · median 158 ms · mean ≈ 190 ms · p95 351 ms per 3 s window.
+This is ~15× faster than the 3 s window, so inference is comfortably real-time with
+large headroom. (An earlier "≤ 80 ms" figure was an estimate, not a measurement, and
+is superseded by these numbers.)
+
+Grad-CAM is applied to the last conv block at eval time for explainability (RQ4).
 
 ---
 
@@ -90,52 +139,51 @@ Grad-CAM is applied to the last conv block at eval time for qualitative explaina
 
 ### 3.1 Role
 
-Few-shot-capable metric learning baseline. Reuses the CNN encoder; only the prototypical head changes. Answers whether metric learning improves generalisation to underrepresented classes (e.g. `threat_chainsaw` at 108 clips).
+Few-shot-capable metric-learning benchmark. Reuses the trained CNN encoder and
+replaces the linear head with nearest-prototype classification. Answers RQ2: does
+metric learning match the supervised CNN? (Result: statistically tied.)
 
 ### 3.2 Input
 
 Same log-mel shards as CNN: `(1, 128, 301)` from `data/processed/mel/`.
 
-### 3.3 Architecture
+### 3.3 Architecture (verified against `notebooks/03b-train-protonet.ipynb`)
 
 ```
-Shared Encoder  ← identical to CNN blocks 1–4 + GlobalAvgPool → 256-dim embedding
-      │
-      ▼
-  Embedding space (256-dim L2-normalised)
-      │
-  ┌───┴────────────────────────┐
-  │  Episode construction       │
-  │  support set → class        │
-  │  prototypes (mean per class)│
-  └───────────────┬────────────┘
-                  │
-  Query distances → nearest prototype → class label
+Pretrained CNN encoder (blocks 1–4 + AdaptiveAvgPool) → 256-dim feature
+   │   (loaded from the CNN checkpoint; encoder frozen in phase 1, unfrozen later)
+   ▼
+Projection head:  Linear(256→256, no bias) → BN1d → ReLU → Linear(256→256, no bias)
+   ▼
+L2-normalise → unit-length 256-dim embedding (on the hypersphere)
+   ▼
+forward(x) = embedding · prototypesᵀ   → 7 cosine-similarity scores
 ```
 
-The encoder is **initialised from the CNN's best checkpoint** and then fine-tuned with the episodic objective.
+Prototypes are **class-mean embeddings**, stored as a registered buffer (computed,
+not gradient-trained). Classification = nearest prototype by cosine similarity. Only
+the projection head (and, in the fine-tune phase, the encoder) is trained.
 
 ### 3.4 Training
 
 | Setting | Value |
 |---|---|
-| Loss | Prototypical loss + SupCon (λ = 0.1) |
-| Optimiser | Adam (lr = 1e-4 — lower than CNN to preserve pretrained weights) |
-| Episode | N=7 way, K=5 shot, 15 queries per class |
+| Loss | Prototypical + SupCon auxiliary (λ = 0.1) |
+| Optimiser | Adam (low lr to preserve pretrained encoder) |
+| Episodes | 7-way, 5-shot, 15 queries/class |
+| Encoder | Frozen first, then unfrozen for end-to-end fine-tuning |
+| Scheduler | CosineAnnealingLR |
 | Curriculum | Same three-phase SNR curriculum as CNN |
-| Scheduler | CosineAnnealingLR (T_max = 30 epochs post-pretraining) |
-
-SupCon auxiliary term (λ = 0.1) tightens within-class cluster separation in embedding space, which matters for classes with very few support examples.
 
 ### 3.5 Critical dependency
 
-**ProtoNet cannot start until the CNN encoder checkpoint is available.** Stage 3b follows Stage 3a on the critical path.
+ProtoNet **requires the CNN encoder checkpoint** — Stage 3b follows Stage 3a.
 
 ### 3.6 Deployment
 
-ProtoNet can operate in two modes on Pi 4:
-1. **Nearest-prototype**: compute query embedding, find closest stored prototype — same latency as CNN
-2. **Linear probe fallback**: freeze encoder, fit a `LogisticRegression` head on stored prototypes — pure scikit-learn, no PyTorch on Pi
+Nearest-prototype inference has the same cost as the CNN backbone. Its appeal is
+few-shot extension: a new threat class can be added by computing its prototype from a
+handful of examples, without retraining a classifier head.
 
 ---
 
@@ -143,90 +191,64 @@ ProtoNet can operate in two modes on Pi 4:
 
 ### 4.1 Role
 
-Out-of-species / out-of-domain frozen transfer baseline. Answers RQ5: does the Geldenhuys & Niesler (2026) finding (frozen layer-2 wav2vec approaching supervised CNN for elephant calls) extend to non-biological threats and survive INT8 quantisation?
+Out-of-domain frozen-transfer benchmark. Answers RQ5: does the finding that a frozen
+low wav2vec layer approaches a supervised CNN (for elephant calls) extend to
+non-biological threats? **Result: not supported** — W2V2-L2 trails the CNN.
 
-### 4.2 Why wav2vec 2.0 layer 2 specifically?
+### 4.2 Why wav2vec 2.0 layer 2
 
-wav2vec 2.0 was pretrained on 960 h of LibriSpeech English speech at 16 kHz. Its lower transformer layers (1–3) encode low-level acoustic features (pitch contours, transients, harmonic structure) that transfer broadly to non-speech audio. Layers 4+ encode speech-specific representations (phonemes, prosody) that actively harm non-speech classification. Layer 2 is the empirically optimal truncation point from the cited study.
+wav2vec 2.0 was pretrained on 960 h of English speech at 16 kHz. Its lower
+transformer layers encode low-level acoustic features (transients, harmonic
+structure) that transfer to non-speech audio; higher layers encode speech-specific
+representations that harm non-speech classification. Layer 2 is the empirically
+chosen truncation point.
 
 ### 4.3 Input
 
 ```
-3-second audio clip
-  resampled to 16 kHz mono (48,000 samples)     ← NOT the mel shards
-  origin : data/processed/w2v2_l2/{split}/       ← new Step 4b shards
+3-second audio clip → 16 kHz mono (48,000 samples)   ← NOT the mel shards
+origin : data/processed/w2v2_l2/{split}/  (768-dim pre-extracted embeddings)
 ```
-
-The existing mel `.npz` shards **cannot** be used — wav2vec 2.0 expects raw waveforms.
 
 ### 4.4 Architecture
 
 ```
-Raw waveform (48,000 samples @ 16 kHz)
-  │
-  ▼
-┌──────────────────────────────────────────────────────┐
-│  wav2vec 2.0 base — FULLY FROZEN (no gradients)       │
-│                                                       │
-│  Feature extractor: 7-layer CNN stack                 │
-│    stride 320 → ~150 frames, 512-dim each             │
-│                                                       │
-│  Positional encoding                                  │
-│                                                       │
-│  Transformer Layer 1  ──────────────────────          │
-│  Transformer Layer 2  ── tap hidden states ◄──────┐  │
-│  Layers 3–12:  NOT LOADED  (memory saving)         │  │
-└────────────────────────────────────────────────────┘  │
-  │                                                      │
-  ▼  shape: (batch, ~150, 768)                          │
-Mean-pool over time axis                                 │
-  │                                                      │
-  ▼  shape: (batch, 768)                                │
-┌──────────────────────┐                                │
-│  Linear(768 → 7)      │  ← ONLY PART THAT TRAINS      │
-│  ~5,376 parameters    │                                │
-└──────────────────────┘
-  │
-  ▼
+Raw waveform (48,000 @ 16 kHz)
+   ▼
+wav2vec 2.0 base — FULLY FROZEN
+  7-layer CNN feature extractor (stride 320 → ~150 frames, 512-dim)
+  + positional encoding
+  Transformer layers 1–2 → tap layer-2 hidden states   (layers 3–12 not loaded)
+   ▼  (batch, ~150, 768)
+Mean-pool over time  →  (batch, 768)
+   ▼
+Trainable head (L2 variant): Linear(768→256) → ReLU → Linear(256→7)
+   ▼
 7-class logits
 ```
 
 ### 4.5 Pre-extraction strategy
 
-Because the encoder is frozen, its output is deterministic. The efficient approach:
-
-```
-Stage 2b  → run all clips through frozen encoder once
-           → mean-pool → save 768-dim vectors to data/processed/w2v2_l2/
-
-Stage 4a  → load 768-dim .npz shards
-          → train Linear(768, 7) only
-          → completes in seconds, CPU-only, no GPU needed for head training
-```
+The frozen encoder is deterministic, so all clips are passed through it **once**
+(Stage 2b) and the 768-dim mean-pooled vectors are cached to
+`data/processed/w2v2_l2/`. Head training then loads these vectors and completes
+quickly on CPU.
 
 ### 4.6 Training
 
 | Setting | Value |
 |---|---|
 | Loss | Focal-weighted cross-entropy (γ = 2) |
-| Optimiser | AdamW (lr = 1e-3, weight decay = 1e-4) |
-| Encoder | Frozen — zero gradients throughout all phases |
-| Batch size | 256 (small model, large batches fine) |
-| Curriculum | Same three SNR phases (applied at waveform extraction time) |
-| Head option A | `nn.Linear(768, 7)` — start here |
-| Head option B | `nn.Linear(768, 256) → ReLU → nn.Linear(256, 7)` — only if A underfits |
-
-No spectrogram augmentations (SpecAugment, Mixup) — those apply to mel representations. Waveform-level augmentation (noise, gain) can be applied during the Step 4b extraction pass.
+| Optimiser | AdamW (lr = 1e-3, weight_decay = 1e-4) |
+| Encoder | Frozen throughout |
+| Batch size | 256 |
+| Curriculum | Same three SNR phases (applied at waveform extraction) |
 
 ### 4.7 Deployment
 
-```
-Frozen encoder stub (layers 1–2 only, ~40 MB ONNX) + INT8 linear head
-Total footprint: ~42 MB  vs  ~360 MB for full wav2vec 2.0 base
-Inference: raw mic audio → resample 16 kHz → encoder → mean-pool → head → class
-```
-
-The INT8 quantised head is negligible (~20 KB). Encoder forward pass on Pi 4 ARM: estimated < 2 s per 3-second clip (to be benchmarked in Stage 5).
+Not deployed (benchmark only). The frozen layer-1–2 encoder stub (~40 MB ONNX) plus
+an INT8 head is feasible on the Pi but was not selected, since the CNN both scores
+higher and is far smaller (4.6 MB).
 
 ---
 
@@ -234,13 +256,16 @@ The INT8 quantised head is negligible (~20 KB). Encoder forward pass on Pi 4 ARM
 
 ### 5.1 Role
 
-Learns a compressed representation of background-only audio. At inference, high reconstruction error signals an anomalous (potentially threatening) acoustic event. Answers whether unsupervised detection is viable when labelled threat data is scarce.
+Learns a compressed representation of **background-only** audio; high reconstruction
+error at inference signals an anomalous (potentially threatening) event. Answers RQ3:
+is label-free anomaly detection viable? (Partially — useful second opinion, not the
+primary classifier.)
 
 ### 5.2 Input
 
 ```
-128-bin log-mel spectrogram (1, 128, 301)
-Training: background_animals + background_wind_rain clips ONLY
+128-bin log-mel (1, 128, 301)
+Training : background_animals + background_wind_rain ONLY
 Inference: all classes — anomaly score = MSE reconstruction error
 ```
 
@@ -248,48 +273,43 @@ Inference: all classes — anomaly score = MSE reconstruction error
 
 ```
 Encoder
-  Input  (1, 128, 301)
-  Conv2D(16, 3×3) → BN → ReLU → MaxPool(2×2)    →  (16,  64, 150)
-  Conv2D(32, 3×3) → BN → ReLU → MaxPool(2×2)    →  (32,  32,  75)
-  Conv2D(64, 3×3) → BN → ReLU → MaxPool(2×2)    →  (64,  16,  37)
-  Flatten → Dense(128)                            →  latent (128-dim)
+  Input (1, 128, 301)
+  Conv2D(16, 3×3) → BN → ReLU → MaxPool 2×2   → (16,  64, 150)
+  Conv2D(32, 3×3) → BN → ReLU → MaxPool 2×2   → (32,  32,  75)
+  Conv2D(64, 3×3) → BN → ReLU → MaxPool 2×2   → (64,  16,  37)
+  Flatten → Dense → latent (latent_dim)
 
-Decoder
-  Dense(128) → reshape (64, 16, 37)
-  ConvTranspose2D(64, 3×3) → BN → ReLU → Upsample  →  (64, 32, 75)
-  ConvTranspose2D(32, 3×3) → BN → ReLU → Upsample  →  (32, 64, 150)
-  ConvTranspose2D(16, 3×3) → BN → ReLU → Upsample  →  (16, 128, 301)
-  ConvTranspose2D(1,  1×1) → Sigmoid                →  (1,  128, 301)
+Decoder  (mirror)
+  Dense → reshape (64, 16, 37)
+  ConvTranspose 64→32→16 (→BN→ReLU→Upsample)
+  ConvTranspose → (1, 128, 301) → Sigmoid
 ```
+
+Latent dimension, learning rate, dropout and weight decay were tuned with Optuna
+(`models/conv_ae/optuna_conv_ae.json`).
 
 ### 5.4 Training
 
 | Setting | Value |
 |---|---|
-| Loss | MSE (pixel-wise reconstruction error) |
-| Optimiser | Adam (lr = 1e-3) |
-| Training data | Background classes only (anomaly detection assumption) |
+| Loss | MSE (pixel-wise reconstruction) |
+| Optimiser | Adam |
+| Training data | Background classes only |
+| Selection metric | Validation detection AUC (not reconstruction loss) |
 | Curriculum | Same three SNR phases (background clips only) |
-| Batch size | 32 |
-| Early stopping | patience = 10 on val reconstruction loss |
 
 ### 5.5 Anomaly threshold
 
-After training, compute reconstruction error distribution on the **background validation set**. Set the anomaly threshold at the 95th percentile. Any test window with MSE above this threshold is flagged as anomalous.
-
-At test time, report per-class AUC-ROC treating each threat class as the positive class against the background distribution.
+Reconstruction-error distribution is measured on the background validation set; the
+threshold is set at a high percentile. Test windows above it are flagged anomalous.
+Per-class AUC-ROC is reported treating each threat class as positive vs background.
 
 ### 5.6 Deployment
 
-```
-Encoder + Decoder → ONNX (opset 17)
-Inference: compute mel → run AE → MSE vs background distribution → threshold → alert/no alert
-(Note: when selected on validation detection AUC, Conv-AE reaches binary AUC 0.805 and gunshot AUC
-0.839 — the best of the two anomaly detectors — but its 29 M params / ~110 MB and below-chance vehicle
-AUC keep it as a complementary signal, not the primary classifier.)
-```
-
-The AE cannot report *which* threat is present — only that something unusual is detected. At deployment, the CNN is the primary classifier; Conv-AE is a complementary anomaly signal.
+Not the primary classifier. When selected on validation detection AUC, Conv-AE
+reaches **binary AUC 0.805** (gunshot AUC 0.839) — the better of the two anomaly
+detectors — but it cannot name *which* threat is present, and its size keeps it as a
+complementary signal only.
 
 ---
 
@@ -297,121 +317,116 @@ The AE cannot report *which* threat is present — only that something unusual i
 
 ### 6.1 Role
 
-Classical machine learning baseline requiring no deep learning. Trained on background-class MFCC features. Provides a lower-bound comparison and validates whether a GPU-free, library-only approach is viable on constrained hardware.
+GPU-free, library-only baseline trained on background MFCC features. Lower-bound
+comparison and validation that a lightweight approach runs on constrained hardware.
 
 ### 6.2 Input
 
 ```
 MFCC + Δ + ΔΔ (40 coefficients × 3 → 120-dim vector)
-Computed at 44.1 kHz, same 3-second windows
-Origin: data/processed/mfcc/{split}/
+44.1 kHz, same 3-second windows
+Origin  : data/processed/mfcc/{split}/
 Training: background classes only
 ```
 
-MFCC is chosen over log-mel because it provides a compact, decorrelated feature vector — ideal for the kernel SVM's distance computations.
+MFCC is chosen over log-mel for its compact, decorrelated vectors — ideal for the
+kernel SVM's distance computations.
 
 ### 6.3 Architecture
 
 ```
-120-dim MFCC+Δ+ΔΔ vector
-  │
-  ▼
-StandardScaler (fit on background training set)
-  │
-  ▼
-PCA (retain 95% variance, typically ~40–60 components)
-  │
-  ▼
-OneClassSVM(kernel='rbf', nu=0.05, gamma='scale')
-  │
-  ▼
-Decision function score → threshold → in-distribution / anomalous
+120-dim MFCC+Δ+ΔΔ
+   ▼ StandardScaler (fit on background train set)
+   ▼ PCA (retain ~95% variance)
+   ▼ OneClassSVM(kernel='rbf', nu, gamma)   ← grid-searched
+   ▼ decision score → threshold → in-distribution / anomalous
 ```
 
 ### 6.4 Training
 
 | Setting | Value |
 |---|---|
-| Loss | One-class hinge loss (OC-SVM objective) |
-| Kernel | RBF |
-| ν (nu) | 0.05 (expected anomaly fraction ≤ 5 %) |
-| γ (gamma) | 'scale' (1 / (n_features × X.var())) |
+| Objective | One-class SVM (RBF kernel) |
+| Hyperparameters | ν and γ via grid search on val (`models/oc_svm/grid_search_oc_svm.json`) |
 | Training data | Background classes only |
 | Curriculum | Same three SNR phases |
-| Hyperparameter search | GridSearchCV on val set (ν ∈ {0.01, 0.05, 0.1}, γ ∈ {'scale','auto'}) |
 
-### 6.5 Anomaly threshold
-
-OC-SVM outputs a signed decision score. Threshold = 0 (the SVM boundary). Clips with score < 0 are anomalous.
-
-### 6.6 Deployment
+### 6.5 Deployment
 
 ```
 scaler + pca + svm → pickle (< 1 MB)
-Inference: extract MFCC → transform → PCA → OC-SVM.predict → alert/no alert
-CPU-only, < 50 ms per window on Pi 4
+Inference: MFCC → transform → PCA → OC-SVM.predict → alert/no alert
+CPU-only, lightest model in the study
 ```
 
-OC-SVM is the lightest model in the study. It can run alongside the CNN with negligible overhead as a confirmatory second opinion.
+OC-SVM reaches **binary AUC 0.719** — below Conv-AE but negligible in footprint, so
+it can run alongside the CNN as a confirmatory second opinion.
 
 ---
 
-## 7. Comparative Summary
+## 7. Comparative Summary (measured results, leak-free group-aware split)
 
-| Model | Trainable Params | Input Type | Training Data | Outputs | Pi 4 Latency (est.) |
-|---|---|---|---|---|---|
-| CNN | ~1.2 M | Log-mel (128×300) | All 7 classes | Class label + probabilities | < 1.5 s |
-| ProtoNet | ~1.2 M (encoder) | Log-mel (128×300) | All 7 classes | Nearest prototype + distance | < 1.5 s |
-| W2V2-L2 | 5,376 (head only) | Raw waveform 16 kHz | All 7 classes | Class label + probabilities | < 2 s (TBD) |
-| Conv-AE | ~800 K | Log-mel (128×300) | Background only | Reconstruction error (anomaly score) | < 1.5 s |
-| OC-SVM | < 1 MB (kernel) | MFCC+Δ+ΔΔ (120-dim) | Background only | In-distribution / anomalous | < 0.05 s |
+Headline metrics from `models/*/results.json`:
 
-### Evaluation targets (all models)
+| Model | Test Acc | Macro F1 | Macro AUC | Trainable Params | Input | Deployed |
+|---|---|---|---|---|---|---|
+| **CNN** | **0.8263** | **0.8069** | **0.9757** | 1.21 M | Log-mel 128×301 | ✅ primary |
+| ProtoNet | 0.8241 | 0.8036 | 0.9748 | ~1.2 M (shared encoder) | Log-mel 128×301 | benchmark |
+| W2V2-L2 | 0.7806 | 0.7626 | 0.9605 | head only | Waveform 16 kHz | benchmark |
+| Conv-AE | — | — | 0.8050 (binary) | — | Log-mel 128×301 | complementary |
+| OC-SVM | — | — | 0.7192 (binary) | — | MFCC 120-dim | confirmatory |
 
-- AUC-ROC > 0.85 (per class)
-- F1 > 0.80 (per class)
-- False positive rate < 20%
-- Inference latency < 30 s (alert delivery, end-to-end)
-- Power ≤ 5 W sustained
-- Grad-CAM qualitative validation (CNN and ProtoNet)
+### Per-class F1 (test set; window counts in parentheses)
+
+| Class | Train / Test win. | CNN | ProtoNet | W2V2-L2 |
+|---|---|---|---|---|
+| background_animals | 3,053 / 1,373 | 0.836 | 0.820 | 0.762 |
+| background_wind_rain | 4,195 / 1,855 | 0.830 | 0.823 | 0.756 |
+| threat_chainsaw | 1,499 / 547 | 0.824 | 0.813 | 0.780 |
+| threat_dog | 751 / 235 | 0.794 | 0.708 | 0.738 |
+| threat_gunshot | 2,287 / 1,000 | 0.815 | 0.843 | 0.812 |
+| threat_human | 2,431 / 696 | 0.868 | 0.895 | 0.858 |
+| threat_vehicle | 638 / 219 | **0.681** | 0.723 | 0.632 |
+
+The two smallest threat classes by **window count** — `threat_vehicle` (638) and
+`threat_dog` (751) — are the two weakest per-class F1s across every model. Note that
+`threat_chainsaw` has few raw files but long recordings, so overlapping windowing
+yields 1,499 training windows and solid F1 (0.824). Vehicle's high AUC (≈ 0.97)
+despite low F1 shows it is **mis-thresholded, not mis-represented** — a
+threshold-calibration opportunity, not a modelling failure.
+
+### Measured edge performance (Pi 4, CPU)
+
+| Metric | Value |
+|---|---|
+| CNN inference latency | ≈ 160 ms / 3 s window (min 154, mean 190) — real-time |
+| Power draw | ≈ 3.0–3.5 W (load-based estimate; no throttling at 47.7 °C) |
+| Model size | 4.6 MB ONNX |
 
 ---
 
 ## 8. Data Flow Summary
 
 ```
-dataset/ (raw audio, 7 classes)
-    │
-    ▼  scripts/audio_preprocessing.py
-    │
-    ├── Step 4a → data/processed/mel/{train,val,test}/     → CNN, ProtoNet, Conv-AE
-    ├── Step 4b → data/processed/w2v2_l2/{train,val,test}/ → W2V2-L2 (768-dim embeddings)
-    └── Step 4c → data/processed/mfcc/{train,val,test}/    → OC-SVM
+dataset/ (raw audio, 7 classes, 11,333 files)
+    │  scripts/audio_preprocessing.py
+    ├── mel/{train,val,test}(+train_aug_A/B/C)  → CNN, ProtoNet, Conv-AE
+    ├── mfcc/{train,val,test}                    → OC-SVM
+    └── w2v2_l2/{train,val,test} (768-dim)       → W2V2-L2
 ```
 
-Steps 4a and 4c are complete. **Step 4b (16 kHz waveform → frozen encoder → 768-dim) is the current Stage 2 blocker.**
+All feature representations are computed up front so every model pulls whichever
+input suits it without re-running audio processing.
 
 ---
 
-## 9. Critical Path
+## 9. Model Selection Rationale
 
-```
-Stage 2b: generate w2v2_l2/ shards (independent)
-    │
-    ▼
-Stage 3a: train CNN          ──→  Stage 3b: train ProtoNet (needs CNN encoder)
-    │                                    │
-    └────────────────────────────────────┘
-                                         │
-    Stage 4a: train W2V2-L2 (independent of CNN)
-    Stage 4b: train Conv-AE  (independent)
-    Stage 4c: train OC-SVM   (independent)
-                                         │
-                                         ▼
-    Stage 5: comparative evaluation (all five models, identical test set)
-                                         │
-                                         ▼
-    Stage 6: deploy CNN (primary) + OC-SVM (confirmatory) on Pi 4
-```
-
-W2V2-L2 is independent of CNN — it only needs the Stage 2b waveform shards. All Stage 4 models can run in parallel once their respective inputs are ready.
+- **CNN and ProtoNet are statistically tied** (macro-F1 0.8069 vs 0.8036, Δ 0.003).
+  The tie means deployment can be decided on **footprint**: the CNN is a single
+  self-contained 4.6 MB ONNX graph with no backbone dependency, so it is deployed.
+- **W2V2-L2 trails** (0.7626) — the RQ5 hypothesis that frozen transfer beats
+  task-trained supervised learning is **not supported** for this domain.
+- **Conv-AE > OC-SVM** among anomaly detectors (AUC 0.805 vs 0.719); either can run
+  as a label-free second opinion, with OC-SVM the lighter option.
+- **On the edge, the CNN is primary; OC-SVM is an optional confirmatory signal.**

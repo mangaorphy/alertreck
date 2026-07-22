@@ -219,19 +219,24 @@ report notebook, or the dashboard.
 
 ## Dataset
 
-7 audio classes, 44.1 kHz, sliced into 3-second windows. Background classes never alert; threat
-classes (2–6) trigger alerts.
+7 audio classes, 44.1 kHz. Raw clips are **variable length** (~0.6–12 s, median ≈ 5 s) — impulsive
+classes (gunshot, dog) are short, continuous classes (chainsaw, wind/rain) are longer. During
+preprocessing every clip is standardized into **3-second analysis windows** (44.1 kHz mono) for both
+training and edge inference. Background classes never alert; threat classes (2–6) trigger alerts.
 
-| Label | Class | Category | Raw files |
-|---|---|---|---|
-| 0 | `background_animals` | Background | 2,139 |
-| 1 | `background_wind_rain` | Background | 2,000 |
-| 2 | `threat_chainsaw` | Threat | 568 |
-| 3 | `threat_dog` | Threat | 1,040 |
-| 4 | `threat_gunshot` | Threat | 3,304 |
-| 5 | `threat_human` | Threat | 1,242 |
-| 6 | `threat_vehicle` | Threat | 1,040 |
-| | **Total** | | **11,333** |
+| Label | Class | Category | Raw files | Audio (hrs) |
+|---|---|---|---|---|
+| 0 | `background_animals` | Background | 2,139 | 3.66 |
+| 1 | `background_wind_rain` | Background | 2,000 | 4.58 |
+| 2 | `threat_chainsaw` | Threat | 568 | 1.43 |
+| 3 | `threat_dog` | Threat | 1,040 | 0.93 |
+| 4 | `threat_gunshot` | Threat | 3,304 | 3.38 |
+| 5 | `threat_human` | Threat | 1,242 | 2.33 |
+| 6 | `threat_vehicle` | Threat | 1,040 | 1.15 |
+| | **Total** | | **11,333** | **≈ 17.5** |
+
+*Total ≈ **17.5 hours** of raw audio. Durations measured with `soundfile`; 33 corrupt/unreadable files
+(all `threat_chainsaw`) are excluded from the hour totals.*
 
 Feature extraction, the group-aware 60/20/20 split (split by parent recording to prevent leakage), and
 the three-phase augmentation curriculum are documented in

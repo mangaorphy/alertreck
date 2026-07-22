@@ -1,0 +1,237 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1500" height="1050" viewBox="0 0 1500 1050" xmlns="http://www.w3.org/2000/svg" font-family="Arial, Helvetica, sans-serif">
+  <rect x="0" y="0" width="1500" height="1050" fill="#FFFFFF"/>
+
+  <!-- ================= TITLE ================= -->
+  <text x="750" y="52" text-anchor="middle" font-size="30" font-weight="bold" fill="#1A1A1A">AlertReck — Edge-AI Acoustic Monitoring Node</text>
+  <text x="750" y="84" text-anchor="middle" font-size="18" fill="#555555">Fully offline acoustic threat detection with GPS-tagged GSM alerting</text>
+
+  <!-- ================= OFFLINE ZONE BOUNDARY ================= -->
+  <rect x="40" y="120" width="1400" height="700" rx="22" fill="#FBFCFE" stroke="#C0392B" stroke-width="2.5" stroke-dasharray="12,8"/>
+  <text x="60" y="152" font-size="20" font-weight="bold" fill="#A93226">Remote National Park — Edge Node (No Internet)</text>
+
+  <!-- GSM coverage zone (only the tower + ranger, off-node) -->
+  <rect x="1175" y="840" width="285" height="185" rx="22" fill="#F2F9F4" stroke="#1E8449" stroke-width="2.5" stroke-dasharray="12,8"/>
+  <text x="1317" y="870" text-anchor="middle" font-size="18" font-weight="bold" fill="#1E8449">GSM Coverage Zone</text>
+
+  <!-- =================================================== -->
+  <!-- =============== ARROW MARKERS ===================== -->
+  <defs>
+    <marker id="grey" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M1 1 L9 5 L1 9" fill="none" stroke="#7F8C8D" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <marker id="blue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M1 1 L9 5 L1 9" fill="none" stroke="#1B5FA5" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <marker id="purple" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M1 1 L9 5 L1 9" fill="none" stroke="#7D3C98" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <marker id="green" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M1 1 L9 5 L1 9" fill="none" stroke="#1E8449" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <marker id="satgrey" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M1 1 L9 5 L1 9" fill="none" stroke="#5D6D7E" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+
+  <!-- =================================================== -->
+  <!-- ============= ACOUSTIC SOURCES (left) ============= -->
+  <g transform="translate(70,300)">
+    <rect x="0" y="0" width="215" height="200" rx="12" fill="#FFFFFF" stroke="#2E4A7A" stroke-width="2"/>
+    <text x="107" y="30" text-anchor="middle" font-size="18" font-weight="bold" fill="#1B4F9C">Acoustic Threat</text>
+    <text x="107" y="52" text-anchor="middle" font-size="18" font-weight="bold" fill="#1B4F9C">Sources</text>
+    <!-- sound source glyph: speaker + waves -->
+    <g transform="translate(78,66)">
+      <polygon points="0,16 14,16 30,2 30,44 14,30 0,30" fill="#34495E"/>
+      <path d="M38 10 Q48 23 38 36" fill="none" stroke="#34495E" stroke-width="3" stroke-linecap="round"/>
+      <path d="M48 3 Q63 23 48 43" fill="none" stroke="#34495E" stroke-width="3" stroke-linecap="round"/>
+    </g>
+    <text x="18" y="146" font-size="14" fill="#222222">gunshot · chainsaw · vehicle</text>
+    <text x="18" y="168" font-size="14" fill="#222222">human · dog</text>
+    <text x="18" y="190" font-size="14" fill="#666666">background: animals, wind/rain</text>
+  </g>
+
+  <!-- sound arrow: sources -> mic -->
+  <line x1="290" y1="400" x2="360" y2="400" stroke="#7F8C8D" stroke-width="3.5" stroke-dasharray="5,5" marker-end="url(#grey)"/>
+  <text x="325" y="388" text-anchor="middle" font-size="14" font-style="italic" fill="#7F8C8D">sound</text>
+
+  <!-- =================================================== -->
+  <!-- ============= INMP441 MIC (left-centre) ============= -->
+  <g transform="translate(365,330)">
+    <rect x="0" y="0" width="185" height="150" rx="12" fill="#FFFFFF" stroke="#2E4A7A" stroke-width="2"/>
+    <text x="92" y="28" text-anchor="middle" font-size="17" font-weight="bold" fill="#1B4F9C">INMP441</text>
+    <text x="92" y="48" text-anchor="middle" font-size="14" fill="#555555">I²S MEMS microphone</text>
+    <!-- mic board: small pcb with port hole -->
+    <g transform="translate(52,62)">
+      <rect x="0" y="0" width="80" height="52" rx="5" fill="#1B3A5C"/>
+      <circle cx="40" cy="20" r="9" fill="#0E2337"/>
+      <circle cx="40" cy="20" r="4" fill="#5DADE2"/>
+      <rect x="8" y="42" width="64" height="6" rx="2" fill="#C9A227"/>
+      <line x1="16" y1="42" x2="16" y2="52" stroke="#C9A227" stroke-width="3"/>
+      <line x1="28" y1="42" x2="28" y2="52" stroke="#C9A227" stroke-width="3"/>
+      <line x1="40" y1="42" x2="40" y2="52" stroke="#C9A227" stroke-width="3"/>
+      <line x1="52" y1="42" x2="52" y2="52" stroke="#C9A227" stroke-width="3"/>
+      <line x1="64" y1="42" x2="64" y2="52" stroke="#C9A227" stroke-width="3"/>
+    </g>
+    <text x="92" y="138" text-anchor="middle" font-size="13" fill="#666666">44.1 kHz mono · digital</text>
+  </g>
+
+  <!-- I2S arrow: mic -> Pi -->
+  <line x1="555" y1="405" x2="640" y2="405" stroke="#1B5FA5" stroke-width="4" marker-end="url(#blue)"/>
+  <text x="597" y="392" text-anchor="middle" font-size="15" font-weight="bold" fill="#1B5FA5">I²S</text>
+  <text x="597" y="425" text-anchor="middle" font-size="12" fill="#1B5FA5">GPIO 18/19/20</text>
+
+  <!-- =================================================== -->
+  <!-- ================ RASPBERRY PI (centre HUB) ================ -->
+  <g transform="translate(645,300)">
+    <!-- board -->
+    <rect x="0" y="0" width="300" height="200" rx="16" fill="#0E7A3C" stroke="#0A5A2C" stroke-width="2"/>
+    <!-- GPIO header -->
+    <rect x="14" y="16" width="150" height="20" rx="4" fill="#2C2C2A"/>
+    <g fill="#C9A227">
+      <circle cx="26" cy="26" r="3"/><circle cx="42" cy="26" r="3"/><circle cx="58" cy="26" r="3"/>
+      <circle cx="74" cy="26" r="3"/><circle cx="90" cy="26" r="3"/><circle cx="106" cy="26" r="3"/>
+      <circle cx="122" cy="26" r="3"/><circle cx="138" cy="26" r="3"/><circle cx="154" cy="26" r="3"/>
+    </g>
+    <!-- SoC -->
+    <rect x="120" y="78" width="70" height="70" rx="6" fill="#1A1A1A"/>
+    <text x="155" y="118" text-anchor="middle" font-size="12" fill="#8899AA">SoC</text>
+    <!-- RAM chip -->
+    <rect x="60" y="70" width="42" height="30" rx="3" fill="#111111"/>
+    <!-- USB / ethernet blocks (right) -->
+    <rect x="248" y="30" width="46" height="46" rx="4" fill="#8D9BA6"/>
+    <rect x="248" y="86" width="46" height="46" rx="4" fill="#8D9BA6"/>
+    <!-- mounting holes -->
+    <circle cx="20" cy="180" r="8" fill="#EAF5EE"/>
+    <circle cx="280" cy="180" r="8" fill="#EAF5EE"/>
+    <circle cx="20" cy="20" r="0" fill="#EAF5EE"/>
+    <!-- Pi raspberry mark -->
+    <circle cx="215" cy="165" r="12" fill="#B32E37"/>
+    <text x="215" y="170" text-anchor="middle" font-size="13" fill="#EAF5EE">π</text>
+  </g>
+  <!-- Pi label box -->
+  <rect x="645" y="512" width="300" height="96" rx="12" fill="#FFFFFF" stroke="#2E4A7A" stroke-width="2"/>
+  <text x="795" y="540" text-anchor="middle" font-size="18" font-weight="bold" fill="#1B4F9C">Raspberry Pi 4 Model B · 2 GB</text>
+  <text x="795" y="564" text-anchor="middle" font-size="14" fill="#333333">ONNX Runtime fp32 · AudioCNN 4.6 MB</text>
+  <text x="795" y="586" text-anchor="middle" font-size="14" fill="#333333">log-mel → inference → per-class threshold</text>
+  <text x="795" y="604" text-anchor="middle" font-size="13" font-weight="bold" fill="#A93226">≈ 190 ms/window · 3.0–3.5 W · zero internet</text>
+
+  <!-- =================================================== -->
+  <!-- ============ EVIDENCE STORE (below Pi) ============ -->
+  <g transform="translate(500,650)">
+    <rect x="0" y="0" width="230" height="120" rx="12" fill="#FFFDF2" stroke="#B7950B" stroke-width="2"/>
+    <text x="115" y="30" text-anchor="middle" font-size="16" font-weight="bold" fill="#7D6608">Flat-file Evidence Store</text>
+    <!-- doc glyph -->
+    <g transform="translate(28,44)">
+      <rect x="0" y="0" width="40" height="50" rx="4" fill="#FFFFFF" stroke="#B7950B" stroke-width="2"/>
+      <line x1="8" y1="14" x2="32" y2="14" stroke="#B7950B" stroke-width="2"/>
+      <line x1="8" y1="24" x2="32" y2="24" stroke="#B7950B" stroke-width="2"/>
+      <line x1="8" y1="34" x2="26" y2="34" stroke="#B7950B" stroke-width="2"/>
+    </g>
+    <text x="82" y="60" font-size="14" fill="#222222">WAV + .mel.npy</text>
+    <text x="82" y="82" font-size="14" fill="#222222">+ JSON sidecar</text>
+  </g>
+
+  <!-- ============ GRAD-CAM REVIEW (below Pi, right) ============ -->
+  <g transform="translate(760,650)">
+    <rect x="0" y="0" width="230" height="120" rx="12" fill="#FFFDF2" stroke="#B7950B" stroke-width="2"/>
+    <text x="115" y="30" text-anchor="middle" font-size="16" font-weight="bold" fill="#7D6608">Grad-CAM Review</text>
+    <!-- heatmap glyph -->
+    <g transform="translate(30,44)">
+      <rect x="0" y="0" width="52" height="40" rx="4" fill="#FDEBD0"/>
+      <rect x="6" y="20" width="10" height="16" fill="#E67E22"/>
+      <rect x="20" y="10" width="10" height="26" fill="#D35400"/>
+      <rect x="34" y="16" width="10" height="20" fill="#F39C12"/>
+    </g>
+    <text x="100" y="60" font-size="14" fill="#222222">off-device</text>
+    <text x="100" y="82" font-size="14" fill="#222222">Mac workstation</text>
+    <text x="115" y="108" text-anchor="middle" font-size="13" fill="#666666">synced via rsync</text>
+  </g>
+
+  <!-- Pi -> evidence store -->
+  <line x1="720" y1="608" x2="640" y2="646" stroke="#B7950B" stroke-width="3" stroke-dasharray="4,4" marker-end="url(#grey)"/>
+  <!-- Pi -> grad-cam -->
+  <line x1="870" y1="608" x2="890" y2="646" stroke="#B7950B" stroke-width="3" stroke-dasharray="4,4" marker-end="url(#grey)"/>
+
+  <!-- =================================================== -->
+  <!-- =============== SIM808 (right) ==================== -->
+  <g transform="translate(645,760)">
+    <!-- UART/AT arrow already drawn below; this is the module -->
+  </g>
+
+  <!-- UART arrow: Pi -> SIM808 (down then right into GSM zone) -->
+  <!-- Actually place SIM808 to the right of the Pi label, feeding GSM zone -->
+  <g transform="translate(1075,300)">
+    <rect x="0" y="0" width="340" height="200" rx="14" fill="#FFFFFF" stroke="#2E4A7A" stroke-width="2"/>
+    <text x="170" y="30" text-anchor="middle" font-size="18" font-weight="bold" fill="#1B4F9C">SIM808 GSM / GPS Module</text>
+    <!-- board glyph -->
+    <g transform="translate(40,52)">
+      <rect x="0" y="0" width="120" height="90" rx="6" fill="#1B4F72"/>
+      <rect x="12" y="12" width="44" height="30" rx="3" fill="#0E2B44"/>
+      <text x="34" y="32" text-anchor="middle" font-size="11" fill="#7FB3D5">SIM</text>
+      <rect x="66" y="12" width="42" height="42" rx="3" fill="#101E2C"/>
+      <circle cx="24" cy="66" r="6" fill="#C9A227"/>
+      <circle cx="48" cy="66" r="6" fill="#C9A227"/>
+      <circle cx="72" cy="66" r="6" fill="#C9A227"/>
+      <circle cx="96" cy="66" r="6" fill="#C9A227"/>
+      <!-- antenna stubs -->
+      <line x1="120" y1="20" x2="150" y2="6" stroke="#34495E" stroke-width="3"/>
+      <circle cx="150" cy="6" r="4" fill="#34495E"/>
+      <line x1="120" y1="44" x2="150" y2="58" stroke="#34495E" stroke-width="3"/>
+      <circle cx="150" cy="58" r="4" fill="#34495E"/>
+    </g>
+    <text x="210" y="72" font-size="14" fill="#222222">GPS: AT+CGNSINF</text>
+    <text x="210" y="96" font-size="14" fill="#222222">SMS: AT+CMGS</text>
+    <text x="210" y="120" font-size="14" fill="#222222">UART to Pi GPIO</text>
+    <text x="210" y="144" font-size="13" fill="#666666">4.1 V buck + 1000 µF</text>
+    <text x="172" y="182" text-anchor="middle" font-size="14" font-weight="bold" fill="#1E8449">SMS only — no data plan</text>
+  </g>
+
+  <!-- UART / AT arrow: Pi -> SIM808 -->
+  <line x1="945" y1="400" x2="1070" y2="400" stroke="#7D3C98" stroke-width="4" marker-end="url(#purple)"/>
+  <text x="1007" y="388" text-anchor="middle" font-size="15" font-weight="bold" fill="#7D3C98">UART / AT</text>
+
+  <!-- =================================================== -->
+  <!-- =============== GPS SATELLITES ==================== -->
+  <g transform="translate(1230,200)">
+    <rect x="20" y="14" width="34" height="22" rx="3" fill="#5D6D7E"/>
+    <rect x="2" y="18" width="16" height="14" fill="#85C1E9"/>
+    <rect x="56" y="18" width="16" height="14" fill="#85C1E9"/>
+    <text x="37" y="58" text-anchor="middle" font-size="14" fill="#5D6D7E">GPS satellites</text>
+  </g>
+  <line x1="1267" y1="262" x2="1267" y2="298" stroke="#5D6D7E" stroke-width="2.5" stroke-dasharray="4,4" marker-end="url(#satgrey)"/>
+  <text x="1315" y="288" text-anchor="middle" font-size="12" fill="#5D6D7E">GPS fix</text>
+
+  <!-- =================================================== -->
+  <!-- =============== GSM TOWER + SMS (off-node) =================== -->
+  <!-- SIM808 -> GSM tower : down out of the node into the GSM zone -->
+  <line x1="1267" y1="500" x2="1267" y2="895" stroke="#1E8449" stroke-width="4.5" marker-end="url(#green)"/>
+  <text x="1355" y="700" text-anchor="middle" font-size="14" font-weight="bold" fill="#1E8449">GPS-tagged SMS</text>
+
+  <g transform="translate(1225,895)">
+    <!-- tower -->
+    <polygon points="42,0 50,110 34,110" fill="#333333"/>
+    <line x1="42" y1="16" x2="14" y2="110" stroke="#333333" stroke-width="4"/>
+    <line x1="42" y1="16" x2="70" y2="110" stroke="#333333" stroke-width="4"/>
+    <line x1="26" y1="62" x2="58" y2="62" stroke="#333333" stroke-width="3"/>
+    <!-- signal waves -->
+    <path d="M60 6 Q78 20 60 36" fill="none" stroke="#1E8449" stroke-width="3" stroke-linecap="round"/>
+    <path d="M70 -4 Q94 20 70 44" fill="none" stroke="#1E8449" stroke-width="3" stroke-linecap="round"/>
+    <text x="120" y="45" text-anchor="middle" font-size="15" font-weight="bold" fill="#1E8449">GSM Base Station</text>
+    <text x="120" y="70" text-anchor="middle" font-size="14" fill="#333333">→ Ranger phone (SMS)</text>
+  </g>
+
+  <!-- =================================================== -->
+  <!-- =============== LEGEND ============================ -->
+  <g transform="translate(70,880)">
+    <text x="0" y="0" font-size="15" font-weight="bold" fill="#333333">Interfaces:</text>
+    <line x1="90" y1="-5" x2="140" y2="-5" stroke="#1B5FA5" stroke-width="4"/>
+    <text x="148" y="0" font-size="14" fill="#333333">I²S (digital audio)</text>
+    <line x1="300" y1="-5" x2="350" y2="-5" stroke="#7D3C98" stroke-width="4"/>
+    <text x="358" y="0" font-size="14" fill="#333333">UART / AT (serial)</text>
+    <line x1="530" y1="-5" x2="580" y2="-5" stroke="#1E8449" stroke-width="4"/>
+    <text x="588" y="0" font-size="14" fill="#333333">GSM SMS (out)</text>
+    <line x1="730" y1="-5" x2="780" y2="-5" stroke="#7F8C8D" stroke-width="3.5" stroke-dasharray="5,5"/>
+    <text x="788" y="0" font-size="14" fill="#333333">acoustic / file / GPS</text>
+  </g>
+</svg>

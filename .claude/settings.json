@@ -62,7 +62,20 @@
       "Bash(ssh alertreck@192.168.1.80 'pgrep -af alertrack.main || echo DAEMON_GONE; echo \"---arecord---\"; arecord -D hw:3,0 -f S32_LE -r 48000 -c 2 -d 3 /tmp/mictest.wav 2>&1 | tail -3; ls -la /tmp/mictest.wav')",
       "Bash(ssh alertreck@192.168.1.80 *)",
       "Bash(ssh alertreck@192.168.1.80 'echo \"=== GPIO18/19/20/21 pin mux \\(need ALT0/ALT2 = I2S/PCM\\) ===\"; for p in 18 19 20 21; do \\(raspi-gpio get $p 2>/dev/null || pinctrl get $p 2>/dev/null\\); done; echo; echo \"=== sound card capture DAI ===\"; cat /proc/asound/card3/pcm0c/sub0/hw_params 2>/dev/null || echo \"no capture substream file\"; echo; echo \"=== is voicehat capture DAI in the card? ===\"; ls /proc/asound/card3/ 2>&1')",
-      "Bash(PATH=/usr/local/bin:__TRACKED_VAR__ nohup caffeinate -i ./upload_to_drive.sh)"
+      "Bash(PATH=/usr/local/bin:__TRACKED_VAR__ nohup caffeinate -i ./upload_to_drive.sh)",
+      "Bash(ssh alertreck@alertreck.local 'sudo systemctl stop alertrack 2>/dev/null; pkill -f alertrack.main 2>/dev/null; sleep 3; pgrep -af alertrack.main || echo \"daemon stopped\"; cd ~/alertreck && timeout 60 venv/bin/python -c \" *)",
+      "Bash(ssh alertreck@alertreck.local 'pgrep -af alertrack.main || echo \"daemon stopped\"; cd ~/alertreck && venv/bin/python -c \" *)",
+      "Bash(ssh -o ConnectTimeout=5 alertreck@alertreck.local 'cd ~/alertreck && venv/bin/python -c \"import torch\" 2>&1 | head -1')",
+      "Skill(dataviz)",
+      "Skill(dataviz:*)",
+      "Bash(node scripts/validate_palette.js \"#2a78d6,#1baf7a,#eda100\" --mode light)",
+      "Bash(/opt/anaconda3/bin/python scripts/plot_chapter5_figures.py)",
+      "Bash(/opt/anaconda3/bin/python -c \"import pytest; print\\('pytest', pytest.__version__\\)\")",
+      "Bash(/opt/anaconda3/bin/python -m pytest tests/ -q --no-header)",
+      "Bash(ssh alertreck@alertreck.local 'cd ~/alertreck && venv/bin/python -m pytest tests/test_hardware.py --run-hardware -q --no-header 2>&1 | tail -25')",
+      "Bash(ssh alertreck@alertreck.local *)",
+      "Bash(ssh alertreck@alertreck.local 'echo \"=== mic held? \\(want 1/1 free\\) ===\"; arecord -l 2>/dev/null | grep -i subdevices; echo \"=== daemon ===\"; systemctl is-active alertrack 2>/dev/null; echo \"=== SIM808 AT ===\"; cd ~/alertreck && timeout 12 venv/bin/python -c \" *)",
+      "Bash(ssh -o ConnectTimeout=6 alertreck@alertreck.local 'cd ~/alertreck && echo \"=== config flags ===\"; grep -nE \"^GPS_ENABLED|^ENABLE_GPS|^NOTIFY_GSM|^NOTIFY_CONSOLE|^SIM808_PORT|^SIM808_BAUDRATE|^RANGER_PHONE\" alertrack/config.py; echo \"\"; echo \"=== is daemon holding the UART? ===\"; pgrep -af alertrack.main | head -2')"
     ]
   }
 }
